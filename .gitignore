@@ -5,6 +5,9 @@ other_materials
 project_description
 *.tgz
 
+# Pickle files
+**/*.pickle
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
