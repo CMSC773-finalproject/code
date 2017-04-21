@@ -1,3 +1,10 @@
+# 773 Project Data
+positives
+controls
+other_materials
+project_description
+*.tgz
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
