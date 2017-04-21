@@ -1,18 +1,23 @@
+# -*- coding: utf-8 -*-
+import pdb
 import nltk
 from nltk.corpus import stopwords
 import string
 import collections
 import math
 import operator
-from collections import namedtuple
+from collections import namedtuple, defaultdict
 import random
 from nltk.stem import WordNetLemmatizer
 from nltk.collocations import *
+from os.path import join,isfile
+import pickle
+from itertools import chain
 
-
-controlsPath = "controls/"
-positivesPath = "positives/"
+controlsPath = "controls/suicidewatch_controls/"
+positivesPath = "positives/suicidewatch_positives/"
 liwcPath = "other_materials/liwc/"
+picklePath = 'tmp/'
 
 controlsIDs = {}
 positivesIDs = {}
@@ -28,97 +33,101 @@ LIWC_words = {}
 
 PostsStruct = namedtuple("PostsStruct", "postID userID timeStamp subReddit postTitle postBody")
 
-#
-#           Loading DEV.txt TRAIN.txt TEST.txt for user ids
-#
+stopws = stopwords.words('english')
+# TODO: does strong.punctuation need to be converted to unicode?
+stopws.extend(string.punctuation)
+stopws.extend(u"'s 're n't 'm 've --".split())
 
-def loadDivisions():
-    with open(controlsPath+"TRAIN.txt", "r") as fc:
-        for line in fc:
-            controlsIDs["Train"] += [int(line)]
-    with open(controlsPath+"DEV.txt", "r") as fc:
-        for line in fc:
-            controlsIDs["Dev"] += [int(line)]
-    with open(controlsPath+"TEST.txt", "r") as fc:
-        for line in fc:
-            controlsIDs["Test"] += [int(line)]
-    with open(positivesPath+"TEST.txt", "r") as fc:
-        for line in fc:
-            positivesIDs["Test"] += [int(line)]
-    with open(positivesPath+"DEV.txt", "r") as fc:
-        for line in fc:
-            positivesIDs["Dev"] += [int(line)]
-    with open(positivesPath+"TRAIN.txt", "r") as fc:
-        for line in fc:
-            positivesIDs["Train"] += [int(line)]
+###
+# File I/O
+###
 
-#
-#       Reads all posts in the given filename and returns an array of PostsStruct s
-#
-def readPost(filename):
+def loadIdDivisions():
+    """
+    Loading DEV.txt TRAIN.txt TEST.txt which contain user ids
+    """
+    for dataset in ['Train', 'Dev', 'Test']:
+        filename = dataset.upper() + '.txt'
+        with open(join(controlsPath,filename), 'r') as fc:
+            controlsIDs[dataset] = [int(line) for line in fc]
+        with open(join(positivesPath,filename), 'r') as fc:
+            positivesIDs[dataset] = [int(line) for line in fc]
+
+def readPosts(filename, users=None):
+    """
+    Returns the list of PostStructs from a given file
+    Optionally filters using a set of user ids
+    """
     posts = []
-    with open(filename, "r") as f:
+    with open(filename, 'r') as f:
         for line in f:
-            segs = line.replace('\t\n','').replace('\n','').split('\t')
-            if (len(segs) < 6):
-                ps = PostsStruct(segs[0], int(segs[1]), int(segs[2]), ' ', segs[3], segs[4])
-            else:
-                ps = PostsStruct(segs[0], int(segs[1]), int(segs[2]), segs[3], segs[4], segs[5])
-            posts += [ps]
+            # Split on only the first 5 tabs (sometimes post bodies have tabs)
+            segs = line.strip().split('\t', 5)
+            # Add empty post body, if necessary (image posts, f.e.)
+            if len(segs) == 5: segs.append('')
+            ps = PostsStruct(segs[0], int(segs[1]), int(segs[2]), segs[3], segs[4], segs[5])
+            if users is None or ps.userID in users:
+                posts.append(ps)
     return posts
 
-def readPostWithID(filename, user):
-    posts = []
-    with open(filename, "r") as f:
-        for line in f:
-            segs = line.replace('\t\n','').replace('\n','').split('\t')
-            if (len(segs) < 6):
-                ps = PostsStruct(segs[0], int(segs[1]), int(segs[2]), ' ', segs[3], segs[4])
-            else:
-                ps = PostsStruct(segs[0], int(segs[1]), int(segs[2]), segs[3], segs[4], segs[5])
-            if (ps.userID == user):
-                posts += [ps]
-    return posts
+def loadPosts(posUsers, negUsers):
+    """
+    Loads all posts from a set of positive users and negative users
+    Caches posts in a pickle object
+    """
+    # Check pickle cache
+    pickle_filename = join(picklePath, str(hash(tuple(posUsers + negUsers))) + ".pickle")
+    if isfile(pickle_filename):
+        print 'Loading posts from cache'
+        with open(pickle_filename, 'rb') as f:
+            return pickle.load(f)
 
-def readPostWithGroupID(filename, users):
-    posts = []
-    with open(filename, "r") as f:
-        for line in f:
-            segs = line.replace('\t\n','').replace('\n','').split('\t')
-            if (len(segs) < 6):
-                ps = PostsStruct(segs[0], int(segs[1]), int(segs[2]), ' ', segs[3], segs[4])
-            else:
-                ps = PostsStruct(segs[0], int(segs[1]), int(segs[2]), segs[3], segs[4], segs[5])
-            if (ps.userID in users):
-                posts += [ps]
-    return posts
+    posPosts = []
+    negPosts = []
+
+    # Read positive posts (filenames: 0.txt...25.txt)
+    for i in xrange(26):
+        posFilename = join(positivesPath, str(i) + '.posts')
+        posPosts += readPosts(posFilename, posUsers)
+
+    # Read control posts (filenames: 1.txt...31.txt)
+    for i in xrange(1,32):
+        negFilename = join(controlsPath, str(i) + '.posts')
+        negPosts += readPosts(negFilename, negUsers)
+
+    # Write to pickle cache
+    with open(pickle_filename, 'wb') as f:
+        pickle.dump((posPosts, negPosts), f, protocol=pickle.HIGHEST_PROTOCOL)
+
+    return posPosts, negPosts
+
+###
+# Data pre-processing
+###
 
 def concatPosts(posts):
-    conRes = ""
+    """Concatenates all of the post bodies"""
+    return ' '.join((p.postBody for p in posts))
+
+def concatPostsByUser(posts):
+    """Concatenates all of the post bodies by user id"""
+    conRes = defaultdict(str)
     for p in posts:
-        conRes += (p.postBody + ' ')
+        conRes[p.userID] += p.postBody + ' '
     return conRes
 
-def concatGroupPosts(posts):
-    conRes = {}
-    for p in posts:
-        if (p.userID not in conRes):
-            conRes[p.userID] = p.postBody + ' '
-        else:
-            conRes[p.userID] += (p.postBody + ' ')
-    return conRes
-
-def tokenizeGroupPost(posts):
+def tokenizePosts(posts):
     tokenTable = {}
-    for p in posts:
-        tokenTable[p] = nltk.word_tokenize(posts[p].decode('utf-8'))
+    for uid in posts:
+        tokenTable[uid] = nltk.word_tokenize(posts[uid].decode('utf-8'))
     return tokenTable
 
-#
-#           All functions required to read and interpret LIWC
-#
+###
+# Functions for reading and interpreting LIWC
+###
+
 def loadLIWC():
-    with open(liwcPath+"LIWC2007.dic", "r") as f:
+    with open(join(liwcPath, 'LIWC2007.dic'), 'r') as f:
         percCounter = 0
         for line in f:
             if (line[0] == '%'):
@@ -156,20 +165,13 @@ def getLIWCclass(word):
     return None
 
 def translateLIWCClass(classID):
-    if classID in LIWC_Classes:
-        return LIWC_Classes[classID]
-    return None
+    return LIWC_Classes[classID] if classID in LIWC_Classes else None
 
 def translateAllLIWCClasses(cid_list):
-    translist = []
-    for cid in cid_list:
-        translist += [translateLIWCClass(cid)]
-    return translist
-#
-#       Calculates D(P||Q)
-#
+    return [translateLIWCClass(cid) for cid in cid_list]
 
 def calcD(p, q, vocab):
+    """Calculates D(P||Q)"""
     res = 0
     vlen = len(vocab)
     for w in vocab:
@@ -191,88 +193,61 @@ def calcD(p, q, vocab):
         res += probP * math.log(probP / probQ, 2)
     return res
 
-
 def calcAverageD(p, q, v):
     av1 = calcD(p, q, v)
     av2 = calcD(q, p, v)
     return ((av1 + av2) / 2.0)
 
-#
-#               Main
-#
+###
+# Collocation Feature Exploration
+###
 
-if __name__ == "__main__":
-    stopws = stopwords.words('english')
-
-    loadDivisions()
-
-    posSamples = random.sample(positivesIDs["Train"], 5)
-    negSamples = random.sample(controlsIDs["Train"], 5)
-
-    print posSamples
-    print negSamples
-
-    posPosts = []
-    negPosts = []
-
-    print "Reading posts."
-
-    for i in range(0,32):
-        posFilename = positivesPath + str(i) + ".posts"
-        negFilename = controlsPath + str(i) + ".posts"
-        if (i <= 25):
-            posPosts += readPostWithGroupID(posFilename, posSamples)
-        if (i >= 1):
-            negPosts += readPostWithGroupID(negFilename, negSamples)
-
-    tpPosts = tokenizeGroupPost(concatGroupPosts(posPosts))
-    tnPosts = tokenizeGroupPost(concatGroupPosts(negPosts))
-
+def collocations():
+    """
+    Generates all bigram collocations and computes their KL-divergence
+    """
     print "Constructing collocations"
-
     allBigrams = {}
-    vocab = []
 
     bigram_measures = nltk.collocations.BigramAssocMeasures()
     wordnet_lemmatizer = WordNetLemmatizer()
-    for p in tpPosts:
+
+    # Count n-grams
+    for uid in tpPosts:
         #finder = BigramCollocationFinder.from_words(tpPosts[p])
-        #finder.apply_word_filter(lambda w: w in stopws or w in string.punctuation or w in "'s 're n't 'm 've --")
-        tokens = (t for t in tpPosts[p] if t not  in stopws and t not in string.punctuation and t not in "'s 're n't 'm 've --")
+        #finder.apply_word_filter(lambda w: w in stopws)
+        tokens = (t for t in tpPosts[uid] if t not in stopws)
         monogram = nltk.FreqDist(tokens).items()
         print monogram
-        #collections.Counter(tpPosts[p])
+        #collections.Counter(tpPosts[uid])
+        allBigrams[("pos", uid)] = monogram #finder.ngram_fd.items()
 
-        allBigrams[("pos", p)] = monogram #finder.ngram_fd.items()
-    for n in tnPosts:
-        #finder = BigramCollocationFinder.from_words(tnPosts[n])
-        #finder.apply_word_filter(lambda w: w in stopws or w in string.punctuation or w in "'s 're n't 'm 've --")
-        tokens = (t for t in tnPosts[n] if t not  in stopws and t not in string.punctuation and t not in "'s 're n't 'm 've --")
+    for uid in tnPosts:
+        #finder = BigramCollocationFinder.from_words(tnPosts[uid])
+        #finder.apply_word_filter(lambda w: w in stopws)
+        tokens = (t for t in tnPosts[uid] if t not in stopws)
         monogram = nltk.FreqDist(tokens).items()
-        allBigrams[("neg", n)] = monogram #finder.ngram_fd.items()
+        allBigrams[("neg", uid)] = monogram #finder.ngram_fd.items()
 
-    for (s, p) in allBigrams:
-        temp = allBigrams[(s, p)]
-        for j in range(0, len(temp)):
-            tb, tv = temp[j]
-            if (tb not in vocab):
-                vocab += [tb]
+    # Build`token vocabulary
+    vocab = []
+    for bigrams in allBigrams.values():
+        for token, count in bigrams:
+            if (token not in vocab):
+                vocab.append(token)
 
     print "Calculating D values."
     Mt = {}
-    for (s1, p1) in allBigrams:
-        for (s2, p2) in allBigrams:
-            if (p1, p2) in Mt:
-                ansD = Mt[(p1,p2)]
-            elif (p2, p1) in Mt:
-                ansD = Mt[(p2, p1)]
+    for (class1, uid1) in allBigrams:
+        for (class2, uid2) in allBigrams:
+            if (uid1, uid2) in Mt:
+                ansD = Mt[(uid1,uid2)]
+            elif (uid2, uid1) in Mt:
+                ansD = Mt[(uid2, uid1)]
             else:
-                Mt[(p1, p2)] = calcAverageD(allBigrams[(s1,p1)], allBigrams[(s2,p2)], vocab)
-                ansD = Mt[(p1,p2)]
-            print "D (" + str(p1) + " || " + str(p2) + " ) = " + str(ansD)
-
-
-
+                Mt[(uid1, uid2)] = calcAverageD(allBigrams[(class1,uid1)], allBigrams[(class2,uid2)], vocab)
+                ansD = Mt[(uid1,uid2)]
+            print "D (" + str(uid1) + " || " + str(uid2) + " ) = " + str(ansD)
 
     """temp = readPost(positivesPath+"0.posts")
     for i in range(0,2):
@@ -284,4 +259,22 @@ if __name__ == "__main__":
     print translateAllLIWCClasses(getLIWCclass('a'))
     """
 
+if __name__ == "__main__":
+    random.seed(773)
 
+    loadIdDivisions()
+
+    posSamples = random.sample(positivesIDs["Train"], 5)
+    negSamples = random.sample(controlsIDs["Train"], 5)
+    print 'Positive Samples: %s' % posSamples
+    print 'Control Samples: %s' % negSamples
+
+    print "Reading posts."
+    # TODO: Only load the files that contain the sampled user ids
+    #       file = abs(floor(uid/2000)) + ".posts"
+    posPosts,negPosts = loadPosts(posSamples, negSamples)
+
+    tpPosts = tokenizePosts(concatPostsByUser(posPosts))
+    tnPosts = tokenizePosts(concatPostsByUser(negPosts))
+
+    collocations()
