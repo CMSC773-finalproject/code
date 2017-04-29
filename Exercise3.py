@@ -410,10 +410,13 @@ s = c.unstack()
 so = s.sort_values() 
 print(so.loc['dummy_t'])
 
-#analysis
+#analysis: we create x+train, x_test, y_train, y_test by giving what are predictor varialble and what is target variable
+# here our target variable will be is the user positive user or control user
 X_train, X_test, y_train, y_test = train_test_split(predictors, target,
     test_size=0.33, random_state=123)
-    
+
+#the code below uses predefined classification algorithms which take in x_train, y_train and compares prediction output with y_test
+#it produces classification report and confusion matrix
 logr_model = linear_model.LogisticRegression()
 func=logr_model.fit(X_train, y_train)
 logr_model.score(X_train, y_train)
