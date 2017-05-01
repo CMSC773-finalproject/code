@@ -76,6 +76,69 @@ def readPosts(filename, users=None, sredditFilter=True):
                     posts.append(ps)
     return posts
 
+def readLIWCConvertedPosts(filename, users=None, sredditFilter=True):
+    posts = []
+    with open(filename, 'r') as f:
+        for line in f:
+            postTitle = []
+            postBody = []
+            # Split on only the first 5 tabs (sometimes post bodies have tabs)
+            segs = line.strip().split('\t', 5)
+            # Add empty post body, if necessary (image posts, f.e.)
+            if len(segs) == 5: segs.append('')
+            pTitle = segs[4].split(' ')
+            for pt in pTitle:
+                liwcTitle = pt.split(',')
+                postTitle += [(int(liwcTitle[0]), int(liwcTitle[1]))]
+            pBody = segs[5].split(' ')
+            for pb in pBody:
+                liwcBody = pb.split(',')
+                postBody += [(int(liwcBody[0]), int(liwcBody[1]))]
+            ps = PostsStruct(segs[0], int(segs[1]), int(segs[2]), segs[3], postTitle, postBody)
+            if users is None or ps.userID in users:
+                if (sredditFilter == True and ps.subReddit not in filterSubreddit):
+                    posts.append(ps)
+    return posts
+
+
+def preprocessPostsIntoLIWC():
+    for i in range(20, 26):
+        fname = str(i)
+        inFilename = join(positivesPath, fname + '.posts')
+        outFilename = join(positivesPath, fname + '.pliwc')
+        print "converting " + inFilename
+        convertPostFileToLIWCFile(inFilename, outFilename)
+    #for i in range(3, 32):
+    #    fname = str(i)
+    #    inFilename = join(controlsPath, fname + '.posts')
+    #    outFilename = join(controlsPath, fname + '.pliwc')
+    #    print "converting " + inFilename
+    #    convertPostFileToLIWCFile(inFilename, outFilename)
+
+def convertPostFileToLIWCFile(inFilename, outFilename):
+    fout = open(outFilename, "w")
+    with open(inFilename, 'r') as fin:
+        for line in fin:
+            segs = line.strip().split('\t', 5)
+            # Add empty post body, if necessary (image posts, f.e.)
+            if len(segs) == 5: segs.append('')
+            ps = PostsStruct(segs[0], int(segs[1]), int(segs[2]), segs[3], segs[4], segs[5])
+            tokenPost = nltk.word_tokenize(ps.postBody.decode('utf-8'))
+            tokenTitle = nltk.word_tokenize(ps.postTitle.decode('utf-8'))
+            liwcPost = sentToLIWC(tokenPost)
+            liwcTitle = sentToLIWC(tokenTitle)
+            #print liwcTitle
+            stroutTitle = ""
+            for ltc, ltv in liwcTitle:
+                stroutTitle += str(ltc) + ',' + str(ltv) + ' '
+            stroutBody = ""
+            for lpc, lpv in liwcPost:
+                stroutBody += str(lpc) + ',' + str(lpv) + ' '
+            outstr = segs[0] + '\t' + segs[1] + '\t' + segs[2] + '\t' + segs[
+                3] + '\t' + stroutTitle + '\t' + stroutBody + '\n'
+            fout.write(outstr)
+    fout.close()
+
 def getPostFilename(userID):
     return str(abs(math.floor(userID / 2000.0))).split('.')[0]
 
@@ -467,43 +530,46 @@ def getPostsMPQA(posts, mpqaDict, type = 'P', filename = None):
 if __name__ == "__main__":
     #random.seed(773)
 
-    loadIdDivisions()
+    #loadIdDivisions()
     loadLIWC()
 
-    MPQADict = loadMPQA()
+    #MPQADict = loadMPQA()
 
 
     liwcVocab = []
     for c in LIWC_Classes:
         liwcVocab += [c]
 
-    posSamples = random.sample(positivesIDs["Train"], 200)
-    negSamples = random.sample(controlsIDs["Train"], 200)
-    print 'Positive Samples: %s' % posSamples
-    print 'Control Samples: %s' % negSamples
+    preprocessPostsIntoLIWC()
 
-    print "Reading posts."
+    #posSamples = random.sample(positivesIDs["Train"], 200)
+    #negSamples = random.sample(controlsIDs["Train"], 200)
+    #print 'Positive Samples: %s' % posSamples
+    #print 'Control Samples: %s' % negSamples
 
-    posPosts,negPosts = loadPosts(posSamples, negSamples)
+    #print "Reading posts."
 
-    tpPosts = tokenizePosts(concatPostsByUser(posPosts))
-    tnPosts = tokenizePosts(concatPostsByUser(negPosts))
+    #posPosts,negPosts = loadPosts(posSamples, negSamples)
 
-    topicPosPosts = tokenizePosts(concatPostTitlesByUser(posPosts))
-    topicNegPosts = tokenizePosts(concatPostTitlesByUser(negPosts))
+    #tpPosts = tokenizePosts(concatPostsByUser(posPosts))
+    #tnPosts = tokenizePosts(concatPostsByUser(negPosts))
+
+    #topicPosPosts = tokenizePosts(concatPostTitlesByUser(posPosts))
+    #topicNegPosts = tokenizePosts(concatPostTitlesByUser(negPosts))
+
     #print posPosts
     #tpPosts = tokenizePosts(samplePostsFromUser(posPosts, 5))
     #tnPosts = tokenizePosts(samplePostsFromUser(negPosts, 5))
 
     print "Computing MPQA scores."
-    getPostsMPQA(topicPosPosts, MPQADict, 'P', "results/PTmpqaPos.txt")
-    getPostsMPQA(topicNegPosts, MPQADict, 'P', "results/PTmpqaNeg.txt")
-    getPostsMPQA(tpPosts, MPQADict, 'P', "results/PBmpqaPos.txt")
-    getPostsMPQA(tnPosts, MPQADict, 'P', "results/PBmpqaNeg.txt")
-    getPostsMPQA(topicPosPosts, MPQADict, 'S', "results/STmpqaPos.txt")
-    getPostsMPQA(topicNegPosts, MPQADict, 'S', "results/STmpqaNeg.txt")
-    getPostsMPQA(tpPosts, MPQADict, 'S', "results/SBmpqaPos.txt")
-    getPostsMPQA(tnPosts, MPQADict, 'S', "results/SBmpqaNeg.txt")
+    #getPostsMPQA(topicPosPosts, MPQADict, 'P', "results/PTmpqaPos.txt")
+    #getPostsMPQA(topicNegPosts, MPQADict, 'P', "results/PTmpqaNeg.txt")
+    #getPostsMPQA(tpPosts, MPQADict, 'P', "results/PBmpqaPos.txt")
+    #getPostsMPQA(tnPosts, MPQADict, 'P', "results/PBmpqaNeg.txt")
+    #getPostsMPQA(topicPosPosts, MPQADict, 'S', "results/STmpqaPos.txt")
+    #getPostsMPQA(topicNegPosts, MPQADict, 'S', "results/STmpqaNeg.txt")
+    #getPostsMPQA(tpPosts, MPQADict, 'S', "results/SBmpqaPos.txt")
+    #getPostsMPQA(tnPosts, MPQADict, 'S', "results/SBmpqaNeg.txt")
 
     #print "Computing LIWC representation."
     #liwcPPosts = postsToLIWC(tpPosts)
@@ -513,14 +579,3 @@ if __name__ == "__main__":
 
     #saveCollocations("results/dlconv.txt", collocations(1, liwcPPosts, liwcNPosts, liwcVocab))
     #saveCollocations("results/dlconv.txt", collocations(1, tpPosts, tnPosts))
-
-
-    """temp = readPost(positivesPath+"0.posts")
-    for i in range(0,2):
-        print temp[i].postBody
-    loadLIWC()
-    print LIWC_words['ace']
-    print getLIWCclass('kissed')
-    print translateAllLIWCClasses(getLIWCclass('kissing'))
-    print translateAllLIWCClasses(getLIWCclass('a'))
-    """
