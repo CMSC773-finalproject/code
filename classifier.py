@@ -338,8 +338,8 @@ class SupervisedClassifier:
     # ({'Feature name' : Feature value}, class)
     def unigramFeatureSet(self, tokenizedSentence):
         ngram_features = {}
-        for word in tokenizedSentence:
-            ngram_features[word] = (word in self.vocab)
+        for word in self.vocab:
+            ngram_features[word] = (word in tokenizedSentence)
         return ngram_features
 
     def getFeatureSetForAllPosts(self,posTokenizedPosts, negTokenizedPosts):
