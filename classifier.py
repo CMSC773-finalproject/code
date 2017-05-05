@@ -213,6 +213,16 @@ class PostProcessingHelpers:
                 tokenTable[uid] = [t for t in tokenTable[uid] if t not in stopws and t != '']
         return tokenTable
 
+    def getVocabularyFromPosts(self, posPosts, negPosts, numVocab):
+        vcb = []
+        for uid in posPosts:
+            vcb += posPosts[uid]
+        for uid in negPosts:
+            vcb += negPosts[uid]
+        vocab = list(nltk.FreqDist(vcb))
+        if (len(vocab) <= numVocab or numVocab < 0):
+            return vocab
+        return vocab[:numVocab]
 
 ###
 # Functions for reading and interpreting LIWC
@@ -586,7 +596,6 @@ class MPQALoader:
 
         return mpqaTable
 
-
 if __name__ == "__main__":
     #random.seed(773)
 
@@ -615,11 +624,14 @@ if __name__ == "__main__":
     tpPostsDev = postHelperFuncs.tokenizePosts(posPostProcessDev.getConcatPostBodies())
     tnPostsDev = postHelperFuncs.tokenizePosts(negPostProcessDev.getConcatPostBodies())
 
-    vocabulary = postHelperFuncs.getVocabulary(tpPostsTrain)
-    vocabulary.union(postHelperFuncs.getVocabulary(tnPostsTrain))
+    #vocabulary = postHelperFuncs.getVocabulary(tpPostsTrain)
+    #vocabulary.union(postHelperFuncs.getVocabulary(tnPostsTrain))
+    vocabulary = postHelperFuncs.getVocabularyFromPosts(tpPostsTrain, tnPostsTrain, 200)
+
 
     supervised_classifier = SupervisedClassifier(liwcLoader, vocabulary)
     supervised_classifier.trainClassifier(tpPostsTrain, tnPostsTrain)
+
 
     print supervised_classifier.classifierAccuracy(tpPostsDev, tnPostsDev)
     cm = supervised_classifier.classifierConfusionMatrix(tpPostsDev, tnPostsDev)
