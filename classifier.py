@@ -56,6 +56,8 @@ class DataLoader:
         self.loadIdDivisions()
         self.posPosts = []
         self.negPosts = []
+        self.posLIWCPosts = []
+        self.negLIWCPosts = []
 
     def loadIdDivisions(self):
         """
@@ -79,13 +81,19 @@ class DataLoader:
         self.posPosts = []
         self.negPosts = []
 
-    def getRandomSample(self, number, setType = "Train", sredditFilter=True):
+    def getRandomSample(self, number, setType = "Train", sredditFilter=True, liwcConverted = False):
         posSamples = random.sample(self.positivesIDs[setType], number)
         negSamples = random.sample(self.controlsIDs[setType], number)
-        self.loadPosts(posSamples, negSamples, sredditFilter)
+        if (liwcConverted):
+            self.loadLIWCConvertedPosts(posSamples, negSamples, sredditFilter)
+        else:
+            self.loadPosts(posSamples, negSamples, sredditFilter)
 
-    def readAllSamples(self, setType = "Train", sredditFilter=True):
-        self.loadPosts(self.positivesIDs[setType], self.controlsIDs[setType], sredditFilter)
+    def readAllSamples(self, setType = "Train", sredditFilter=True, liwcConverted = False):
+        if (liwcConverted):
+            self.loadLIWCConvertedPosts(self.positivesIDs[setType], self.controlsIDs[setType], sredditFilter)
+        else:
+            self.loadPosts(self.positivesIDs[setType], self.controlsIDs[setType], sredditFilter)
 
     def readPosts(self, filename, users=None, sredditFilter=True):
         """
@@ -148,6 +156,34 @@ class DataLoader:
     def getControlsPosts(self):
         return self.negPosts
 
+    def getLIWCPositivePosts(self):
+        return self.posLIWCPosts
+
+    def getLIWCControlsPosts(self):
+        return self.negLIWCPosts
+
+    def loadLIWCConvertedPosts(self, posUsers, negUsers, subRedditFilter = True):
+        postFilenames = []
+        # Read positive posts (filenames: 0.txt...25.txt)
+        for puid in posUsers:
+            tmp = self.getPostFilename(puid)
+            if tmp not in postFilenames:
+                postFilenames += [tmp]
+        for filename in postFilenames:
+            posFilename = join(positivesPath, filename + '.pliwc')
+            self.posLIWCPosts += self.readLIWCConvertedPosts(posFilename, posUsers, subRedditFilter)
+
+        # Read control posts (filenames: 1.txt...31.txt)
+        postFilenames = []
+        for nuid in negUsers:
+            tmp = self.getPostFilename(nuid)
+            if tmp not in postFilenames:
+                postFilenames += [tmp]
+        for filename in postFilenames:
+            negFilename = join(controlsPath, filename + '.pliwc')
+            self.negLIWCPosts += self.readLIWCConvertedPosts(negFilename, negUsers, subRedditFilter)
+
+
     def readLIWCConvertedPosts(self, filename, users=None, sredditFilter=True):
         posts = []
         with open(filename, 'r') as f:
@@ -158,13 +194,19 @@ class DataLoader:
                 segs = line.strip().split('\t', 5)
                 # Add empty post body, if necessary (image posts, f.e.)
                 if len(segs) == 5: segs.append('')
+                elif len(segs) < 5:
+                    continue
                 pTitle = segs[4].split(' ')
                 for pt in pTitle:
                     liwcTitle = pt.split(',')
+                    if (len(liwcTitle) < 2):
+                        continue
                     postTitle += [(int(liwcTitle[0]), int(liwcTitle[1]))]
                 pBody = segs[5].split(' ')
                 for pb in pBody:
                     liwcBody = pb.split(',')
+                    if (len(liwcBody) < 2):
+                        continue
                     postBody += [(int(liwcBody[0]), int(liwcBody[1]))]
                 ps = PostsStruct(segs[0], int(segs[1]), int(segs[2]), segs[3], postTitle, postBody)
                 if users is None or ps.userID in users:
@@ -190,11 +232,31 @@ class PostProcessing:
             conRes[p.userID] += p.postBody + ' '
         self.concatinatedPosts = conRes
 
+    def concatLIWCPostsByUser(self):
+        """Concatenates all of the post bodies by user id"""
+        conRes = {}
+        for p in self.rawPosts:
+            if p.userID not in conRes:
+                conRes[p.userID] = p.postBody
+            else:
+                conRes[p.userID] += p.postBody
+        self.concatinatedPosts = conRes
+
     def concatPostTitlesByUser(self):
         """Concatenates all of the post titles by user id"""
         conRes = defaultdict(str)
         for p in self.rawPosts:
             conRes[p.userID] += p.postTitle + ' '
+        self.concatinatedTitles = conRes
+
+    def concatLIWCPostTitlesByUser(self):
+        """Concatenates all of the post titles by user id"""
+        conRes = {}
+        for p in self.rawPosts:
+            if p.userID not in conRes:
+                conRes[p.userID] = p.postTitle
+            else:
+                conRes[p.userID] += p.postTitle
         self.concatinatedTitles = conRes
 
     def getConcatPostBodies(self):
@@ -230,6 +292,29 @@ class PostProcessingHelpers:
         if (len(vocab) <= numVocab or numVocab < 0):
             return vocab
         return vocab[:numVocab]
+
+    def unwrapLIWCPost(self, concatedPosts, filterStopWs = True):
+        cpRes = {}
+        for uid in concatedPosts:
+            cpRes[uid] = []
+            for (lc, lv) in concatedPosts[uid]:
+                if (lc <= 10 ):
+                    continue
+                for i in range(0,lv):
+                    cpRes[uid] += [lc]
+        return cpRes
+
+    def getEmoScoreForLIWCConvertedPosts(self, concatedPosts, liwcDict, emoscoreType = "Neg"):
+        emsRes = {}
+        for uid in concatedPosts:
+            emsRes[uid] = liwcDict.scoreEmotionUnrwappedSent(concatedPosts[uid], emoscoreType)
+        return emsRes
+
+    def getEmoScoreForLIWCConvertedPost(self, concatedPost, liwcDict, emoscoreType = "Neg"):
+        rtval = liwcDict.scoreEmotionUnrwappedSent(concatedPost, emoscoreType)
+        if rtval == None:
+            rtval = 0
+        return rtval
 
 ###
 # Functions for reading and interpreting LIWC
@@ -317,19 +402,43 @@ class LIWCProcessor:
     #
     #   Emotion Score based on LIWC: 127 = Neg emo, 126 = Pos emo
     #
-    def scoreEmotion(self, liwcConvertedPost):
+    def scoreEmotion(self, liwcConvertedPost, scoreType = "Neg"):
         normalFact = 0
         posFact = 0
         negFact = 0
         for (w, v) in liwcConvertedPost:
             if (w == 126):
-                posFact = v
+                posFact += v
             if (w == 127):
-                negFact = v
+                negFact += v
             normalFact += v
         if (normalFact < 1):
             return None
-        return float((- negFact)) / float(normalFact)
+        numerator = -negFact
+        if (scoreType == "Pos"):
+            numerator = posFact
+        elif (scoreType == "Both"):
+            numerator = posFact - negFact
+        return float(numerator) / float(normalFact)
+
+    def scoreEmotionUnrwappedSent(self, liwcUnwrappedPost, scoreType = "Neg"):
+        normalFact = 0
+        posFact = 0
+        negFact = 0
+        for w in liwcUnwrappedPost:
+            if (w == 126):
+                posFact += 1
+            if (w == 127):
+                negFact += 1
+            normalFact += 1
+        if (normalFact < 1):
+            return None
+        numerator = -negFact
+        if (scoreType == "Pos"):
+            numerator = posFact
+        elif (scoreType == "Both"):
+            numerator = posFact - negFact
+        return float(numerator) / float(normalFact)
 
     def calculateEmotionScoreForAllPosts(self, posts, filename = None):
         convertedPosts = self.postsToLIWC(posts)
@@ -350,6 +459,7 @@ class SupervisedClassifier:
     def __init__(self, liwc, vocab):
         self.liwcProcesses = liwc
         self.vocab = vocab
+        self.helpers = PostProcessingHelpers()
 
     # Feature fromat:
     # ({'Feature name' : Feature value}, class)
@@ -359,22 +469,43 @@ class SupervisedClassifier:
             ngram_features[word] = (word in tokenizedSentence)
         return ngram_features
 
-    def getFeatureSetForAllPosts(self,posTokenizedPosts, negTokenizedPosts):
+    def emotionScoreFeatureSet(self, liwcUnwarpedSentence, svm = False):
+        negScore = self.helpers.getEmoScoreForLIWCConvertedPost(liwcUnwarpedSentence, self.liwcProcesses, "Neg")
+        posScore = self.helpers.getEmoScoreForLIWCConvertedPost(liwcUnwarpedSentence, self.liwcProcesses, "Pos")
+        avgScore = self.helpers.getEmoScoreForLIWCConvertedPost(liwcUnwarpedSentence, self.liwcProcesses, "Both")
+        score_features = {}
+        score_features['NEGEMO'] = negScore
+        score_features['POSEMO'] = posScore
+        score_features['AVGEMO'] = avgScore
+        #if (svm):
+        #    score_features['NEGEMO'] = int(negScore * 10000.0)
+        #    score_features['POSEMO'] = int(posScore * 10000.0)
+        #    score_features['AVGEMO'] = int(avgScore * 10000.0)
+
+        return score_features
+
+    def getFeatureSetForAllPosts(self,posTokenizedPosts, negTokenizedPosts, svm = False):
         feature_set = []
         for uid in posTokenizedPosts:
             feature_set += [(self.unigramFeatureSet(posTokenizedPosts[uid]), 'pos')]
+            feature_set += [(self.emotionScoreFeatureSet(posTokenizedPosts[uid], svm), 'pos')]
         for uid in negTokenizedPosts:
             feature_set += [(self.unigramFeatureSet(negTokenizedPosts[uid]), 'neg')]
+            feature_set += [(self.emotionScoreFeatureSet(negTokenizedPosts[uid], svm), 'neg')]
         random.shuffle(feature_set)
         return feature_set
 
-    def getFeatureSetForAPost(self,tokenizedPost, classification):
-        feature_set = [(self.unigramFeatureSet(tokenizedPost), classification)]
-        return feature_set
+    #def getFeatureSetForAPost(self,tokenizedPost, classification):
+    #    feature_set = [(self.unigramFeatureSet(tokenizedPost), classification)]
+    #    feature_set += [(self.emotionScoreFeatureSet(tokenizedPost), classification)]
+    #    return feature_set
 
     def trainClassifier(self, posTokenizedPosts, negTokenizedPosts, classifierType = "NB"):
         print "Training " + classifierType + "!"
-        feature_set = self.getFeatureSetForAllPosts(posTokenizedPosts, negTokenizedPosts)
+        svmFlag = False
+        if classifierType == "SVM":
+            svmFlag = True
+        feature_set = self.getFeatureSetForAllPosts(posTokenizedPosts, negTokenizedPosts, svmFlag)
         if classifierType == "NB":
             self.classifier = nltk.NaiveBayesClassifier.train(feature_set)
             self.classifier.show_most_informative_features(20)
@@ -620,9 +751,53 @@ if __name__ == "__main__":
     random.seed(773)
 
     data = DataLoader()
-    data.getRandomSample(100)
+    data.getRandomSample(1000, liwcConverted=True)
     liwcLoader = LIWCProcessor()
     postHelperFuncs = PostProcessingHelpers()
+
+    # -------------------------------------------------------------------------------------------------------------
+    # ------------------------------------ Word Class -------------------------------------------------------------
+    # -------------------------------------------------------------------------------------------------------------
+
+
+    posLIWCPostProcess = PostProcessing(data.getLIWCPositivePosts())
+    posLIWCPostProcess.concatLIWCPostsByUser()
+    posLIWCPostProcess.concatLIWCPostTitlesByUser()
+
+    negLIWCPostProcess = PostProcessing(data.getLIWCControlsPosts())
+    negLIWCPostProcess.concatLIWCPostsByUser()
+
+
+    pLIWCPosts = postHelperFuncs.unwrapLIWCPost(posLIWCPostProcess.getConcatPostBodies())
+    nLIWCPosts = postHelperFuncs.unwrapLIWCPost(negLIWCPostProcess.getConcatPostBodies())
+
+    #print postHelperFuncs.getEmoScoreForLIWCConvertedPosts(pLIWCPosts, liwcLoader)
+    #print postHelperFuncs.getEmoScoreForLIWCConvertedPosts(nLIWCPosts, liwcLoader)
+
+    data.clearPosts()
+    data.getRandomSample(500, setType='Test', liwcConverted=True)
+    posDevLIWCPostProcess = PostProcessing(data.getLIWCPositivePosts())
+    posDevLIWCPostProcess.concatLIWCPostsByUser()
+
+    negDevLIWCPostProcess = PostProcessing(data.getLIWCControlsPosts())
+    negDevLIWCPostProcess.concatLIWCPostsByUser()
+
+    pDevLIWCPosts = postHelperFuncs.unwrapLIWCPost(posDevLIWCPostProcess.getConcatPostBodies())
+    nDevLIWCPosts = postHelperFuncs.unwrapLIWCPost(negDevLIWCPostProcess.getConcatPostBodies())
+
+    vocabulary = liwcLoader.getLIWCVocab()
+
+    supervised_classifier = SupervisedClassifier(liwcLoader, vocabulary)
+    supervised_classifier.trainClassifier(pLIWCPosts, nLIWCPosts, "DTree")
+
+    pr, rc, fm, ac, cm = supervised_classifier.classifierPRF(pDevLIWCPosts, nDevLIWCPosts)
+    print (cm.pretty_format(sort_by_count=True, show_percents=True))
+    print "Accuracy = " + str(ac) + ", Precision = " + str(pr) + ", Recall = " + str(rc) + ", F-Measure = " + str(fm)
+
+    """
+    # -------------------------------------------------------------------------------------------------------------
+    # ------------------------------------ Unigram ---------------------------------------------------------------
+    # -------------------------------------------------------------------------------------------------------------
 
     posPostProcess = PostProcessing(data.getPositivePosts())
     negPostProcess = PostProcessing(data.getControlsPosts())
@@ -647,12 +822,15 @@ if __name__ == "__main__":
     vocabulary = postHelperFuncs.getVocabularyFromPosts(tpPostsTrain, tnPostsTrain, 1000)
 
     supervised_classifier = SupervisedClassifier(liwcLoader, vocabulary)
-    supervised_classifier.trainClassifier(tpPostsTrain, tnPostsTrain, "SVM")
+    supervised_classifier.trainClassifier(tpPostsTrain, tnPostsTrain, "NB")
 
     pr, rc, fm, ac, cm = supervised_classifier.classifierPRF(tpPostsDev, tnPostsDev)
     print (cm.pretty_format(sort_by_count=True, show_percents=True))
     print "Accuracy = " + str(ac) + ", Precision = " + str(pr) + ", Recall = " + str(rc) + ", F-Measure = " + str(fm)
-
+    """
+    # -------------------------------------------------------------------------------------------------------------
+    # ------------------------------------ Junk -------------------------------------------------------------------
+    # -------------------------------------------------------------------------------------------------------------
 
     #print 'Positive Samples: %s' % posSamples
     #print 'Control Samples: %s' % negSamples
