@@ -2,17 +2,20 @@
 import pdb
 import nltk
 from nltk.corpus import stopwords
+from nltk.stem import WordNetLemmatizer
+from nltk.collocations import *
+import nltk.classify
 import string
 import collections
 import math
 import operator
 from collections import namedtuple, defaultdict
 import random
-from nltk.stem import WordNetLemmatizer
-from nltk.collocations import *
+
 from os.path import join,isfile
 import pickle
 from itertools import chain
+from sklearn.svm import LinearSVC
 
 controlsPath = "controls/"
 positivesPath = "positives/"
@@ -64,6 +67,10 @@ class DataLoader:
                 self.controlsIDs[dataset] = [int(line) for line in fc]
             with open(join(positivesPath,filename), 'r') as fc:
                 self.positivesIDs[dataset] = [int(line) for line in fc]
+
+        #print "Train --> Neg: " + str(len(self.controlsIDs['Train'])) + ", Pos: " + str(len(self.positivesIDs['Train']))
+        #print "Dev --> Neg: " + str(len(self.controlsIDs['Dev'])) + ", Pos: " + str(len(self.positivesIDs['Dev']))
+        #print "Test --> Neg: " + str(len(self.controlsIDs['Test'])) + ", Pos: " + str(len(self.positivesIDs['Test']))
 
     def getPostFilename(self, userID):
         return str(abs(math.floor(userID / 2000.0))).split('.')[0]
@@ -365,10 +372,21 @@ class SupervisedClassifier:
         feature_set = [(self.unigramFeatureSet(tokenizedPost), classification)]
         return feature_set
 
-    def trainClassifier(self, posTokenizedPosts, negTokenizedPosts):
-        print "Training!"
+    def trainClassifier(self, posTokenizedPosts, negTokenizedPosts, classifierType = "NB"):
+        print "Training " + classifierType + "!"
         feature_set = self.getFeatureSetForAllPosts(posTokenizedPosts, negTokenizedPosts)
-        self.classifier = nltk.NaiveBayesClassifier.train(feature_set)
+        if classifierType == "NB":
+            self.classifier = nltk.NaiveBayesClassifier.train(feature_set)
+            self.classifier.show_most_informative_features(20)
+        elif classifierType == "SVM":
+            self.classifier = nltk.classify.SklearnClassifier(LinearSVC())
+            self.classifier.train(feature_set)
+        elif classifierType == "Maxent":
+            self.classifier = nltk.MaxentClassifier.train(feature_set)
+        else:
+            self.classifier = nltk.DecisionTreeClassifier.train(feature_set)
+            print self.classifier.pseudocode(depth=10)
+
 
     def classifierAccuracy(self, posTokenizedPostsTest, negTokenizedPostsTest):
         feature_set = self.getFeatureSetForAllPosts(posTokenizedPostsTest, negTokenizedPostsTest)
@@ -384,6 +402,7 @@ class SupervisedClassifier:
             gs += [v]
         return nltk.ConfusionMatrix(gs, predictions)
 
+    # Computes Confusion Matrix and returns, Precision, Recall, F-Measure, Accuaracy, and Confusion Matrix
     def classifierPRF(self, posTokenizedPostsTest, negTokenizedPostsTest):
         cm = self.classifierConfusionMatrix(posTokenizedPostsTest, negTokenizedPostsTest)
         TP = cm['pos', 'pos']
@@ -393,7 +412,8 @@ class SupervisedClassifier:
         precision = float(TP) / float(TP + FP)
         recall = float(TP) / float(TP + FN)
         FMeasure = (2.0 * precision * recall) / (precision + recall)
-        return (precision, recall, FMeasure)
+        Accuracy = float(TP + TN) / float(TP + TN + FP + FN)
+        return (precision, recall, FMeasure, Accuracy, cm)
 
     def removeClassesFromFeatures(self, featureSet):
         feature_set = []
@@ -597,7 +617,7 @@ class MPQALoader:
         return mpqaTable
 
 if __name__ == "__main__":
-    #random.seed(773)
+    random.seed(773)
 
     data = DataLoader()
     data.getRandomSample(100)
@@ -624,20 +644,14 @@ if __name__ == "__main__":
     tpPostsDev = postHelperFuncs.tokenizePosts(posPostProcessDev.getConcatPostBodies())
     tnPostsDev = postHelperFuncs.tokenizePosts(negPostProcessDev.getConcatPostBodies())
 
-    #vocabulary = postHelperFuncs.getVocabulary(tpPostsTrain)
-    #vocabulary.union(postHelperFuncs.getVocabulary(tnPostsTrain))
-    vocabulary = postHelperFuncs.getVocabularyFromPosts(tpPostsTrain, tnPostsTrain, 200)
-
+    vocabulary = postHelperFuncs.getVocabularyFromPosts(tpPostsTrain, tnPostsTrain, 1000)
 
     supervised_classifier = SupervisedClassifier(liwcLoader, vocabulary)
-    supervised_classifier.trainClassifier(tpPostsTrain, tnPostsTrain)
+    supervised_classifier.trainClassifier(tpPostsTrain, tnPostsTrain, "SVM")
 
-
-    print supervised_classifier.classifierAccuracy(tpPostsDev, tnPostsDev)
-    cm = supervised_classifier.classifierConfusionMatrix(tpPostsDev, tnPostsDev)
+    pr, rc, fm, ac, cm = supervised_classifier.classifierPRF(tpPostsDev, tnPostsDev)
     print (cm.pretty_format(sort_by_count=True, show_percents=True))
-    pr, rc, fm = supervised_classifier.classifierPRF(tpPostsDev, tnPostsDev)
-    print "Precision = " + str(pr) + ", Recall = " + str(rc) + ", F-Measure = " + str(fm)
+    print "Accuracy = " + str(ac) + ", Precision = " + str(pr) + ", Recall = " + str(rc) + ", F-Measure = " + str(fm)
 
 
     #print 'Positive Samples: %s' % posSamples
