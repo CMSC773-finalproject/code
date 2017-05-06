@@ -159,7 +159,7 @@ class DataLoader:
                     postBody += [(int(liwcBody[0]), int(liwcBody[1]))]
                 ps = PostsStruct(segs[0], int(segs[1]), int(segs[2]), segs[3], postTitle, postBody)
                 if users is None or ps.userID in users:
-                    if (sredditFilter == True and ps.subReddit not in filterSubreddit):
+                    if (not sredditFilter or ps.subReddit not in filterSubreddit):
                         posts.append(ps)
         return posts
 
