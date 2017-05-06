@@ -110,23 +110,21 @@ class DataLoader:
             with open(pickle_filename, 'rb') as f:
                 return pickle.load(f)
 
-        postFilenames = []
+        postFilenames = set()
         # Read positive posts (filenames: 0.txt...25.txt)
         for puid in posUsers:
-            tmp = self.getPostFilename(puid)
-            if tmp not in postFilenames:
-                postFilenames += [tmp]
+            filename = self.getPostFilename(puid)
+            postFilenames.add(filename)
         for filename in postFilenames:
             posFilename = join(positivesPath, filename + '.posts')
             self.posPosts += self.readPosts(posFilename, posUsers, subRedditFilter)
 
         # Read control posts (filenames: 1.txt...31.txt)
-        postFilenames = []
+        postFilenames = set()
 
         for nuid in negUsers:
-            tmp = self.getPostFilename(nuid)
-            if tmp not in postFilenames:
-                postFilenames += [tmp]
+            filename = self.getPostFilename(nuid)
+            postFilenames.add(filename)
         for filename in postFilenames:
             negFilename = join(controlsPath, filename + '.posts')
             self.negPosts += self.readPosts(negFilename, negUsers, subRedditFilter)
