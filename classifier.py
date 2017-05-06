@@ -94,7 +94,7 @@ class DataLoader:
                 if len(segs) == 5: segs.append('')
                 ps = PostsStruct(segs[0], int(segs[1]), int(segs[2]), segs[3], segs[4], segs[5])
                 if users is None or ps.userID in users:
-                    if (sredditFilter == True and ps.subReddit not in filterSubreddit):
+                    if (not sredditFilter or ps.subReddit not in filterSubreddit):
                         posts.append(ps)
         return posts
 
