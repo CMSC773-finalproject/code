@@ -21,10 +21,6 @@ mpqaPath = "papers/subjectivity_clues_hltemnlp05/subjectivity_clues_hltemnlp05/"
 picklePath = 'tmp/'
 
 
-
-
-
-
 PostsStruct = namedtuple("PostsStruct", "postID userID timeStamp subReddit postTitle postBody")
 
 stopws = stopwords.words('english')
@@ -194,16 +190,15 @@ class PostProcessing:
     def getConcatPostTitles(self):
         return self.concatinatedTitles
 
-
-class PostProcessingHelpers:
-
-    def getVocabulary(self, tokenizedPosts):
+    @staticmethod
+    def getVocabulary(tokenizedPosts):
         vocab = set()
         for uid in tokenizedPosts:
             vocab.union(set(tokenizedPosts[uid]))
         return vocab
 
-    def tokenizePosts(self, posts, filterStopWords = True):
+    @staticmethod
+    def tokenizePosts(posts, filterStopWords = True):
         tokenTable = {}
         for uid in posts:
             tokenTable[uid] = nltk.word_tokenize(posts[uid].lower().decode('utf-8'))
@@ -211,7 +206,8 @@ class PostProcessingHelpers:
                 tokenTable[uid] = [t for t in tokenTable[uid] if t not in stopws and t != '']
         return tokenTable
 
-    def getVocabularyFromPosts(self, posPosts, negPosts, numVocab):
+    @staticmethod
+    def getVocabularyFromPosts(posPosts, negPosts, numVocab):
         vcb = []
         for uid in posPosts:
             vcb += posPosts[uid]
@@ -600,7 +596,6 @@ if __name__ == "__main__":
     data = DataLoader()
     data.getRandomSample(100)
     liwcLoader = LIWCProcessor()
-    postHelperFuncs = PostProcessingHelpers()
 
     posPostProcess = PostProcessing(data.getPositivePosts())
     negPostProcess = PostProcessing(data.getControlsPosts())
@@ -616,15 +611,15 @@ if __name__ == "__main__":
     negPostProcessDev.concatPostsByUser()
 
 
-    tpPostsTrain = postHelperFuncs.tokenizePosts(posPostProcess.getConcatPostBodies())
-    tnPostsTrain = postHelperFuncs.tokenizePosts(negPostProcess.getConcatPostBodies())
+    tpPostsTrain = PostProcessing.tokenizePosts(posPostProcess.getConcatPostBodies())
+    tnPostsTrain = PostProcessing.tokenizePosts(negPostProcess.getConcatPostBodies())
 
-    tpPostsDev = postHelperFuncs.tokenizePosts(posPostProcessDev.getConcatPostBodies())
-    tnPostsDev = postHelperFuncs.tokenizePosts(negPostProcessDev.getConcatPostBodies())
+    tpPostsDev = PostProcessing.tokenizePosts(posPostProcessDev.getConcatPostBodies())
+    tnPostsDev = PostProcessing.tokenizePosts(negPostProcessDev.getConcatPostBodies())
 
-    #vocabulary = postHelperFuncs.getVocabulary(tpPostsTrain)
-    #vocabulary.union(postHelperFuncs.getVocabulary(tnPostsTrain))
-    vocabulary = postHelperFuncs.getVocabularyFromPosts(tpPostsTrain, tnPostsTrain, 200)
+    #vocabulary = PostProcessing.getVocabulary(tpPostsTrain)
+    #vocabulary.union(PostProcessing.getVocabulary(tnPostsTrain))
+    vocabulary = PostProcessing.getVocabularyFromPosts(tpPostsTrain, tnPostsTrain, 200)
 
 
     supervised_classifier = SupervisedClassifier(liwcLoader, vocabulary)
