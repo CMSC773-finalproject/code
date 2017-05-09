@@ -5,6 +5,7 @@ from nltk.corpus import stopwords
 import string
 import collections
 import math
+from math import log
 import operator
 from collections import namedtuple, defaultdict
 import random
@@ -100,11 +101,11 @@ class DataLoader:
         Caches posts in a pickle object
         """
         # Check pickle cache
-        pickle_filename = join(picklePath, str(hash(tuple(posUsers + negUsers))) + ".pickle")
-        if isfile(pickle_filename):
-            print 'Loading posts from cache'
-            with open(pickle_filename, 'rb') as f:
-                return pickle.load(f)
+        # pickle_filename = join(picklePath, str(hash(tuple(posUsers + negUsers))) + ".pickle")
+        # if isfile(pickle_filename):
+        #     print 'Loading posts from cache'
+        #     with open(pickle_filename, 'rb') as f:
+        #         self.posPosts, self.negPosts = pickle.load(f)
 
         postFilenames = set()
         # Read positive posts (filenames: 0.txt...25.txt)
@@ -126,8 +127,8 @@ class DataLoader:
             self.negPosts += self.readPosts(negFilename, negUsers, subRedditFilter)
 
         # Write to pickle cache
-        with open(pickle_filename, 'wb') as f:
-            pickle.dump((self.posPosts, self.negPosts), f, protocol=pickle.HIGHEST_PROTOCOL)
+        # with open(pickle_filename, 'wb') as f:
+        #     pickle.dump((self.posPosts, self.negPosts), f, protocol=pickle.HIGHEST_PROTOCOL)
 
     def getPositivePosts(self):
         return self.posPosts
@@ -191,10 +192,16 @@ class PostProcessing:
         return self.concatinatedTitles
 
     @staticmethod
-    def getVocabulary(tokenizedPosts):
+    def getVocabulary(tokenizedPosts,ngram=1):
+        assert ngram >= 1 and ngram <= 3
         vocab = set()
         for uid in tokenizedPosts:
-            vocab.union(set(tokenizedPosts[uid]))
+            if ngram == 1:
+                vocab = vocab.union(set(tokenizedPosts[uid]))
+            elif ngram == 2:
+                vocab = vocab.union(set(nltk.bigrams(tokenizedPosts[uid])))
+            elif ngram == 3:
+                vocab = vocab.union(set(nltk.trigrams(tokenizedPosts[uid])))
         return vocab
 
     @staticmethod
@@ -236,16 +243,19 @@ class LIWCProcessor:
                     percCounter += 1
                 else:
                     if (percCounter < 2):
-                        segs = line.replace('\n','').split('\t')
+                        segs = line.replace('\n','').strip().split('\t')
                         self.LIWC_Classes[int(segs[0])] = segs[1]
                     else:
-                        segs = line.replace('\n','').split('\t')
+                        segs = line.replace('\n','').strip().split('\t')
                         if segs[0] == 'like' or segs[0] == 'kind':
                             continue
                         cli = []
                         for i in range(1,len(segs)):
                             if(segs[i] != ''):
-                                cli += [int(segs[i])]
+                                try:
+                                    cli += [int(segs[i])]
+                                except:
+                                    pdb.set_trace()
                         self.LIWC_words[segs[0]] = cli
 
     def getLIWCclass(self, word):
@@ -346,12 +356,23 @@ class SupervisedClassifier:
             ngram_features[word] = (word in tokenizedSentence)
         return ngram_features
 
+    def loadNgramClassifier(self, ngramclassifier):
+        self.ngramclassifier = ngramclassifier
+
+    def ngramFeatureSet(self, sentence):
+        pos,neg = self.ngramclassifier.prob(sentence)
+        return {"pos": pos, "neg":neg}
+
+    def featurify(self, sentence):
+        return self.ngramFeatureSet(sentence)
+        # return self.unigramFeatureSet(sentence)
+
     def getFeatureSetForAllPosts(self,posTokenizedPosts, negTokenizedPosts):
         feature_set = []
         for uid in posTokenizedPosts:
-            feature_set += [(self.unigramFeatureSet(posTokenizedPosts[uid]), 'pos')]
+            feature_set += [(self.featurify(posTokenizedPosts[uid]), 'pos')]
         for uid in negTokenizedPosts:
-            feature_set += [(self.unigramFeatureSet(negTokenizedPosts[uid]), 'neg')]
+            feature_set += [(self.featurify(negTokenizedPosts[uid]), 'neg')]
         random.shuffle(feature_set)
         return feature_set
 
@@ -370,12 +391,8 @@ class SupervisedClassifier:
 
     def classifierConfusionMatrix(self, posTokenizedPostsTest, negTokenizedPostsTest):
         gold = self.getFeatureSetForAllPosts(posTokenizedPostsTest, negTokenizedPostsTest)
-        feature_set = self.removeClassesFromFeatures(gold)
+        feature_set,gs = map(list,zip(*gold)) # Split features and classes from list of tuples
         predictions = self.classifier.classify_many(feature_set)
-        gs = []
-        for i in range(0, len(gold)):
-            g, v = gold[i]
-            gs += [v]
         return nltk.ConfusionMatrix(gs, predictions)
 
     def classifierPRF(self, posTokenizedPostsTest, negTokenizedPostsTest):
@@ -390,10 +407,7 @@ class SupervisedClassifier:
         return (precision, recall, FMeasure)
 
     def removeClassesFromFeatures(self, featureSet):
-        feature_set = []
-        for feat, val in featureSet:
-            feature_set.append(feat)
-        return feature_set
+        return [feat for feat,clss in featureSet]
 
     def calcD(self, p, q, vocab, lenP, lenQ):
         """Calculates D(P||Q)"""
@@ -500,6 +514,83 @@ class SupervisedClassifier:
                 line = str(uid1) + '\t' + str(uid2) + '\t' + str(tableM[(uid1, uid2)]) + '\n'
                 f.write(line)
 
+class NgramClassifier():
+    def __init__(self, trP, trN):
+        self.pos_freq = {}
+        self.neg_freq = {}
+
+        # Generate frequency distributions of tokens
+        for uid,post_text in trP.items():
+            self.pos_freq["uni"] = nltk.FreqDist(post_text)
+            self.pos_freq["bi"] = nltk.FreqDist(nltk.bigrams(post_text))
+            self.pos_freq["tri"] = nltk.FreqDist(nltk.trigrams(post_text))
+        for uid,post_text in trN.items():
+            self.neg_freq["uni"] = nltk.FreqDist(post_text)
+            self.neg_freq["bi"] = nltk.FreqDist(nltk.bigrams(post_text))
+            self.neg_freq["tri"] = nltk.FreqDist(nltk.trigrams(post_text))
+
+        self.vocab_size = {}
+        for n in ["uni","bi","tri"]:
+            self.vocab_size[n] = len(set(self.pos_freq[n].keys() + self.neg_freq[n].keys()))
+
+    def prob(self, text):
+        """
+        Computes the log-probabilities of the post belonging to the positive and negative dataset, respectively
+        Uses stupid backoff (alpha = 0.4)
+        """
+        pos = 1
+        neg = 1
+        alpha = 0.4
+        # V = float(len(self.vocab))
+        for i in xrange(len(text) - 2):
+            unigram,bigram,trigram = [tuple(text[i:i+n]) for n in [1,2,3]]
+            unigram = unigram[0] # unwrap
+            # pdb.set_trace()
+            if trigram in self.pos_freq["tri"]:
+                # pdb.set_trace()
+                pos += log(self.pos_freq["tri"][trigram] / float(self.vocab_size["tri"]))
+            elif bigram in self.pos_freq["bi"]:
+                pos += log(alpha * self.pos_freq["bi"][bigram] / float(self.vocab_size["bi"]))
+            elif unigram in self.pos_freq["uni"]:
+                pos += log((alpha ** 2) * self.pos_freq["uni"][unigram] / float(self.vocab_size["uni"]))
+            else:
+                pos += 0 # log((alpha ** 3) / V)
+
+            if trigram in self.neg_freq["tri"]:
+                neg += log(self.neg_freq["tri"][trigram] / float(self.vocab_size["tri"]))
+            elif bigram in self.neg_freq["bi"]:
+                neg += log(alpha * self.neg_freq["bi"][bigram] / float(self.vocab_size["bi"]))
+            elif unigram in self.neg_freq["uni"]:
+                neg += log((alpha ** 2) * self.neg_freq["uni"][unigram] / float(self.vocab_size["uni"]))
+            else:
+                neg += 0 # log((alpha ** 3) / V)
+            # print unigram,bigram,trigram,pos,neg
+        return pos,neg
+
+    def classify(self, post):
+        """Classifies post by using log probs"""
+        pos_logprob, neg_logprob = self.prob(post)
+        return "pos" if pos_logprob < neg_logprob else "neg"
+
+    def confusionMatrix(self, tstP, tstN):
+        """Generates NLTK Confusion Matrix for test positives and negatives"""
+        labeled_features = [(text,"pos") for text in tstP.values()]+[(text,"neg") for text in tstN.values()]
+        random.shuffle(labeled_features)
+        features,gold_labels = map(list,zip(*labeled_features))
+        predictions = [self.classify(post) for post in features]
+        return nltk.ConfusionMatrix(gold_labels, predictions)
+
+    def classifierPRF(self, tstP, tstN):
+        """Computes precision, recall and f-measure for a given set of test posts"""
+        cm = self.confusionMatrix(tstP, tstN)
+        TP = cm['pos', 'pos']
+        TN = cm['neg', 'neg']
+        FP = cm['neg', 'pos']
+        FN = cm['pos', 'neg']
+        precision = float(TP) / float(TP + FP)
+        recall = float(TP) / float(TP + FN)
+        FMeasure = (2.0 * precision * recall) / (precision + recall)
+        return (precision, recall, FMeasure)
 
 #
 #   MPQA Subjectivity and polarity
@@ -591,40 +682,88 @@ class MPQALoader:
         return mpqaTable
 
 if __name__ == "__main__":
-    #random.seed(773)
+    # random.seed(773)
 
-    data = DataLoader()
-    data.getRandomSample(100)
-    liwcLoader = LIWCProcessor()
+    # Check pickle cache
+    pickle_filename = join(picklePath, str(hash("may.9.2017.10:56PM")) + ".pickle")
+    if isfile(pickle_filename):
+        print 'Initializing from cache'
+        with open(pickle_filename, 'rb') as f:
+            liwcLoader, vocabulary, tpPostsTrain, tnPostsTrain, tpPostsDev, tnPostsDev,charTpPostsTrain,charTnPostsTrain,charTpPostsDev,charTnPostsDev = pickle.load(f)
+    else:
+        data = DataLoader()
+        data.getRandomSample(100)
+        liwcLoader = LIWCProcessor()
 
-    posPostProcess = PostProcessing(data.getPositivePosts())
-    negPostProcess = PostProcessing(data.getControlsPosts())
-    posPostProcess.concatPostsByUser()
-    negPostProcess.concatPostsByUser()
+        posPostProcess = PostProcessing(data.getPositivePosts())
+        negPostProcess = PostProcessing(data.getControlsPosts())
+        posPostProcess.concatPostsByUser()
+        negPostProcess.concatPostsByUser()
 
-    data.clearPosts()
-    data.getRandomSample(20, 'Dev')
+        data.clearPosts()
+        data.getRandomSample(20, 'Dev')
 
-    posPostProcessDev = PostProcessing(data.getPositivePosts())
-    negPostProcessDev = PostProcessing(data.getControlsPosts())
-    posPostProcessDev.concatPostsByUser()
-    negPostProcessDev.concatPostsByUser()
+        posPostProcessDev = PostProcessing(data.getPositivePosts())
+        negPostProcessDev = PostProcessing(data.getControlsPosts())
+        posPostProcessDev.concatPostsByUser()
+        negPostProcessDev.concatPostsByUser()
 
+        tpPostsTrain = PostProcessing.tokenizePosts(posPostProcess.getConcatPostBodies())
+        tnPostsTrain = PostProcessing.tokenizePosts(negPostProcess.getConcatPostBodies())
 
-    tpPostsTrain = PostProcessing.tokenizePosts(posPostProcess.getConcatPostBodies())
-    tnPostsTrain = PostProcessing.tokenizePosts(negPostProcess.getConcatPostBodies())
+        tpPostsDev = PostProcessing.tokenizePosts(posPostProcessDev.getConcatPostBodies())
+        tnPostsDev = PostProcessing.tokenizePosts(negPostProcessDev.getConcatPostBodies())
 
-    tpPostsDev = PostProcessing.tokenizePosts(posPostProcessDev.getConcatPostBodies())
-    tnPostsDev = PostProcessing.tokenizePosts(negPostProcessDev.getConcatPostBodies())
+        vocabulary = PostProcessing.getVocabulary(tpPostsTrain)
+        vocabulary = vocabulary.union(PostProcessing.getVocabulary(tnPostsTrain))
+        vocabulary = vocabulary.union(PostProcessing.getVocabulary(tpPostsDev))
+        vocabulary = vocabulary.union(PostProcessing.getVocabulary(tnPostsDev))
+        # vocabulary = PostProcessing.getVocabularyFromPosts(tpPostsTrain, tnPostsTrain, 200)
 
-    #vocabulary = PostProcessing.getVocabulary(tpPostsTrain)
-    #vocabulary.union(PostProcessing.getVocabulary(tnPostsTrain))
-    vocabulary = PostProcessing.getVocabularyFromPosts(tpPostsTrain, tnPostsTrain, 200)
+        charTpPostsTrain = posPostProcess.getConcatPostBodies()
+        charTnPostsTrain = negPostProcess.getConcatPostBodies()
+        charTpPostsDev = posPostProcessDev.getConcatPostBodies()
+        charTnPostsDev = negPostProcessDev.getConcatPostBodies()
 
+        # vocabs = {}
+        # vocabs["char"] = []
+        # # unigram vocabulary
+        # # vocabs["char"] += [PostProcessing.getVocabulary(charTpPostsTrain,1).union(PostProcessing.getVocabulary(charTnPostsTrain,1))]
+        # vocabs["char"] += [set(charTpPostsTrain).union(charTnPostsTrain)]
+        # # bigram vocabulary
+        # vocabs["char"] += [set(nltk.bigrams(charTpPostsTrain)).union(nltk.bigrams(charTnPostsTrain))]
+        # # trigram vocabulary
+        # vocabs["char"] += [set(nltk.trigrams(charTpPostsTrain)).union(nltk.trigrams(charTnPostsTrain))]
+        #
+        # vocabs["word"] = []
+        # unigram vocabulary
+        # vocabs["word"] += [set(charTpPostsTrain).union(charTnPostsTrain)]
+        # bigram vocabulary
+        # vocabs["word"] += [set(charTpPostsTrain).union(charTnPostsTrain)]
+        # trigram vocabulary
+        # vocabs["word"] += [set(charTpPostsTrain).union(charTnPostsTrain)]
+
+        # Write to pickle cache
+        with open(pickle_filename, 'wb') as f:
+            pickle.dump((liwcLoader, vocabulary, tpPostsTrain, tnPostsTrain, tpPostsDev, tnPostsDev,charTpPostsTrain,charTnPostsTrain,charTpPostsDev,charTnPostsDev), f, protocol=pickle.HIGHEST_PROTOCOL)
+
+    # ngram = NgramClassifier(charTpPostsTrain, charTnPostsTrain)
+    ngram = NgramClassifier(tpPostsTrain, tnPostsTrain)
+    for uid in tpPostsDev:
+        label = ngram.classify(tpPostsDev[uid])
+        print str(uid), ":", str(ngram.prob(tpPostsDev[uid])), label, ("WRONG" if label != "pos" else "")
+    for uid in tnPostsDev:
+        label = ngram.classify(tnPostsDev[uid])
+        print str(uid), ":", str(ngram.prob(tnPostsDev[uid])), label, ("WRONG" if label != "neg" else "")
+
+    cm = ngram.confusionMatrix(tpPostsDev, tnPostsDev)
+    print (cm.pretty_format(sort_by_count=True, show_percents=True))
+    pr, rc, fm = ngram.classifierPRF(tpPostsDev, tnPostsDev)
+    print "Precision = " + str(pr) + ", Recall = " + str(rc) + ", F-Measure = " + str(fm)
 
     supervised_classifier = SupervisedClassifier(liwcLoader, vocabulary)
+    supervised_classifier.loadNgramClassifier(ngram)
     supervised_classifier.trainClassifier(tpPostsTrain, tnPostsTrain)
-
 
     print supervised_classifier.classifierAccuracy(tpPostsDev, tnPostsDev)
     cm = supervised_classifier.classifierConfusionMatrix(tpPostsDev, tnPostsDev)
