@@ -5,6 +5,7 @@ from nltk.corpus import stopwords
 from nltk.stem import WordNetLemmatizer
 from nltk.collocations import *
 import nltk.classify
+from nltk.stem.porter import PorterStemmer
 import string
 import collections
 import math
@@ -15,7 +16,10 @@ import random
 from os.path import join,isfile
 import pickle
 from itertools import chain
+from operator import itemgetter
 from sklearn.svm import LinearSVC
+from gensim import corpora, models
+import gensim
 
 controlsPath = "controls/"
 positivesPath = "positives/"
@@ -24,16 +28,12 @@ mpqaPath = "papers/subjectivity_clues_hltemnlp05/subjectivity_clues_hltemnlp05/"
 picklePath = 'tmp/'
 
 
-
-
-
-
 PostsStruct = namedtuple("PostsStruct", "postID userID timeStamp subReddit postTitle postBody")
 
 stopws = stopwords.words('english')
 # TODO: does string.punctuation need to be converted to unicode?
 stopws.extend(string.punctuation)
-stopws.extend(u"'s 're n't 'm 've 'd '' 't --".split())
+stopws.extend(u"'s 're n't 'm 've 'd '' 't -- `` ... .. ** +_ __".split())
 
 filterSubreddit = ["Anger", "BPD", "EatingDisorders", "MMFB", "StopSelfHarm", "SuicideWatch", "addiction", "alcoholism",
                    "depression", "feelgood", "getting over it", "hardshipmates", "mentalhealth", "psychoticreddit",
@@ -81,18 +81,18 @@ class DataLoader:
         self.posPosts = []
         self.negPosts = []
 
-    def getRandomSample(self, number, setType = "Train", sredditFilter=True, liwcConverted = False):
+    def getRandomSample(self, number, setType = "Train", sredditFilter=True, fileType = "Both"):
         posSamples = random.sample(self.positivesIDs[setType], number)
         negSamples = random.sample(self.controlsIDs[setType], number)
-        if (liwcConverted):
+        if (fileType != "Word"):
             self.loadLIWCConvertedPosts(posSamples, negSamples, sredditFilter)
-        else:
+        if (fileType != "LIWC"):
             self.loadPosts(posSamples, negSamples, sredditFilter)
 
-    def readAllSamples(self, setType = "Train", sredditFilter=True, liwcConverted = False):
-        if (liwcConverted):
+    def readAllSamples(self, setType = "Train", sredditFilter=True, fileType = "Both"):
+        if (fileType != "Word"):
             self.loadLIWCConvertedPosts(self.positivesIDs[setType], self.controlsIDs[setType], sredditFilter)
-        else:
+        if (fileType != "LIWC"):
             self.loadPosts(self.positivesIDs[setType], self.controlsIDs[setType], sredditFilter)
 
     def readPosts(self, filename, users=None, sredditFilter=True):
@@ -282,6 +282,16 @@ class PostProcessingHelpers:
                 tokenTable[uid] = [t for t in tokenTable[uid] if t not in stopws and t != '']
         return tokenTable
 
+    def stemmSinglePost(self, tokenizedPost):
+        p_stemmer = PorterStemmer()
+        return [p_stemmer.stem(w) for w in tokenizedPost]
+
+    def stemmPosts(self, tokenizedPosts):
+        stemmedTable = {}
+        for uid in tokenizedPosts:
+            stemmedTable[uid] = self.stemmSinglePost(tokenizedPosts[uid])
+        return stemmedTable
+
     def getVocabularyFromPosts(self, posPosts, negPosts, numVocab):
         vcb = []
         for uid in posPosts:
@@ -310,11 +320,25 @@ class PostProcessingHelpers:
             emsRes[uid] = liwcDict.scoreEmotionUnrwappedSent(concatedPosts[uid], emoscoreType)
         return emsRes
 
-    def getEmoScoreForLIWCConvertedPost(self, concatedPost, liwcDict, emoscoreType = "Neg"):
+    def getEmoScoreForLIWCConvertedPost(self, concatedPost, liwcDict, emoscoreType = "Neg", bucketing = True):
         rtval = liwcDict.scoreEmotionUnrwappedSent(concatedPost, emoscoreType)
         if rtval == None:
             rtval = 0
+
+        if (bucketing):
+            emscore = math.fabs(rtval)
+            if (emoscoreType != "Both"):
+                rtval = int(emscore * 100.0)
+                if (rtval > 10):
+                    rtval = 10
+            else:
+                rtval = int ((emscore + 0.1) * 50.0)
+                if (rtval < 0):
+                    rtval = 0
+                if (rtval > 10):
+                    rtval = 10
         return rtval
+
 
 ###
 # Functions for reading and interpreting LIWC
@@ -456,20 +480,37 @@ class LIWCProcessor:
 
 
 class SupervisedClassifier:
-    def __init__(self, liwc, vocab):
+    def __init__(self, liwc, vocab, lda):
         self.liwcProcesses = liwc
         self.vocab = vocab
         self.helpers = PostProcessingHelpers()
+        self.ldaModel = lda
 
     # Feature fromat:
     # ({'Feature name' : Feature value}, class)
-    def unigramFeatureSet(self, tokenizedSentence):
+    def unigramFeatureSet(self, tokenizedSentence, liwcFeature = False):
+        usingvocab = self.vocab
+        if liwcFeature:
+            usingvocab = self.liwcProcesses.getLIWCVocab()
         ngram_features = {}
-        for word in self.vocab:
+        for word in usingvocab:
             ngram_features[word] = (word in tokenizedSentence)
         return ngram_features
 
-    def emotionScoreFeatureSet(self, liwcUnwarpedSentence, svm = False):
+    def bigramCollocationFeatureSet(self, tokenizedSentece):
+        ngram_features = {}
+        bigramSent = self.getBigramCollocation(tokenizedSentece)
+        for bigram in self.bigramVocab:
+            ngram_features[bigram] = self.isBigramIncluded(bigram, bigramSent)
+        return ngram_features
+
+    def isBigramIncluded(self, bigram, bigramSent):
+        for b, n in bigramSent:
+            if bigram == b:
+                return True
+        return False
+
+    def emotionScoreFeatureSet(self, liwcUnwarpedSentence):
         negScore = self.helpers.getEmoScoreForLIWCConvertedPost(liwcUnwarpedSentence, self.liwcProcesses, "Neg")
         posScore = self.helpers.getEmoScoreForLIWCConvertedPost(liwcUnwarpedSentence, self.liwcProcesses, "Pos")
         avgScore = self.helpers.getEmoScoreForLIWCConvertedPost(liwcUnwarpedSentence, self.liwcProcesses, "Both")
@@ -477,21 +518,42 @@ class SupervisedClassifier:
         score_features['NEGEMO'] = negScore
         score_features['POSEMO'] = posScore
         score_features['AVGEMO'] = avgScore
-        #if (svm):
-        #    score_features['NEGEMO'] = int(negScore * 10000.0)
-        #    score_features['POSEMO'] = int(posScore * 10000.0)
-        #    score_features['AVGEMO'] = int(avgScore * 10000.0)
-
         return score_features
 
-    def getFeatureSetForAllPosts(self,posTokenizedPosts, negTokenizedPosts, svm = False):
+    def ldaTopicModelFeatureSet(self, tokenizedSentence):
+        feature_set = {}
+        if tokenizedSentence == []:
+            return feature_set
+        ldatopicsN, ldatopicsP = self.ldaModel.getTopic(tokenizedSentence)
+        if (ldatopicsP != None):
+            for lt, lp in ldatopicsP:
+                tag = "LDATOPIC" + str(lt)
+                val = int(lp * 20.0)
+                feature_set[tag] = val
+        if (ldatopicsN != None):
+            for lt, lp in ldatopicsN:
+                tag = "LDATOPIC" + str(lt)
+                val = int(lp * 20.0)
+                feature_set[tag] = val
+        return feature_set
+
+    def getFeatureSetForAllPosts(self, posTokenizedPosts, negTokenizedPosts, posLIWCPosts, negLIWCPosts):
         feature_set = []
         for uid in posTokenizedPosts:
-            feature_set += [(self.unigramFeatureSet(posTokenizedPosts[uid]), 'pos')]
-            feature_set += [(self.emotionScoreFeatureSet(posTokenizedPosts[uid], svm), 'pos')]
+            #feature_set += [(self.unigramFeatureSet(posTokenizedPosts[uid]), 'pos')]
+            feature_set += [(self.ldaTopicModelFeatureSet(posTokenizedPosts[uid]), 'pos')]
+            #feature_set += [(self.bigramCollocationFeatureSet(posTokenizedPosts[uid]), 'pos')]
+        #for uid in posLIWCPosts:
+        #    feature_set += [(self.unigramFeatureSet(posLIWCPosts[uid], liwcFeature=True), 'pos')]
+        #    feature_set += [(self.emotionScoreFeatureSet(posLIWCPosts[uid]), 'pos')]
         for uid in negTokenizedPosts:
+            #feature_set += [(self.bigramCollocationFeatureSet(negTokenizedPosts[uid]), 'neg')]
             feature_set += [(self.unigramFeatureSet(negTokenizedPosts[uid]), 'neg')]
-            feature_set += [(self.emotionScoreFeatureSet(negTokenizedPosts[uid], svm), 'neg')]
+            #feature_set += [(self.ldaTopicModelFeatureSet(negTokenizedPosts[uid]), 'neg')]
+        #for uid in negLIWCPosts:
+        #    feature_set += [(self.unigramFeatureSet(negLIWCPosts[uid], liwcFeature=True), 'neg')]
+        #    feature_set += [(self.emotionScoreFeatureSet(negLIWCPosts[uid]), 'neg')]
+
         random.shuffle(feature_set)
         return feature_set
 
@@ -500,15 +562,12 @@ class SupervisedClassifier:
     #    feature_set += [(self.emotionScoreFeatureSet(tokenizedPost), classification)]
     #    return feature_set
 
-    def trainClassifier(self, posTokenizedPosts, negTokenizedPosts, classifierType = "NB"):
+    def trainClassifier(self, posTokenizedPosts, negTokenizedPosts, posLIWCPosts, negLIWCPosts, classifierType = "NB"):
         print "Training " + classifierType + "!"
-        svmFlag = False
-        if classifierType == "SVM":
-            svmFlag = True
-        feature_set = self.getFeatureSetForAllPosts(posTokenizedPosts, negTokenizedPosts, svmFlag)
+        feature_set = self.getFeatureSetForAllPosts(posTokenizedPosts, negTokenizedPosts, posLIWCPosts, negLIWCPosts)
         if classifierType == "NB":
             self.classifier = nltk.NaiveBayesClassifier.train(feature_set)
-            self.classifier.show_most_informative_features(20)
+            self.classifier.show_most_informative_features(50)
         elif classifierType == "SVM":
             self.classifier = nltk.classify.SklearnClassifier(LinearSVC())
             self.classifier.train(feature_set)
@@ -519,12 +578,12 @@ class SupervisedClassifier:
             print self.classifier.pseudocode(depth=10)
 
 
-    def classifierAccuracy(self, posTokenizedPostsTest, negTokenizedPostsTest):
-        feature_set = self.getFeatureSetForAllPosts(posTokenizedPostsTest, negTokenizedPostsTest)
+    def classifierAccuracy(self, posTokenizedPostsTest, negTokenizedPostsTest, posLIWCPosts, negLIWCPosts):
+        feature_set = self.getFeatureSetForAllPosts(posTokenizedPostsTest, negTokenizedPostsTest, posLIWCPosts, negLIWCPosts)
         return nltk.classify.accuracy(self.classifier, feature_set)
 
-    def classifierConfusionMatrix(self, posTokenizedPostsTest, negTokenizedPostsTest):
-        gold = self.getFeatureSetForAllPosts(posTokenizedPostsTest, negTokenizedPostsTest)
+    def classifierConfusionMatrix(self, posTokenizedPostsTest, negTokenizedPostsTest, posLIWCPosts, negLIWCPosts):
+        gold = self.getFeatureSetForAllPosts(posTokenizedPostsTest, negTokenizedPostsTest, posLIWCPosts, negLIWCPosts)
         feature_set = self.removeClassesFromFeatures(gold)
         predictions = self.classifier.classify_many(feature_set)
         gs = []
@@ -534,15 +593,24 @@ class SupervisedClassifier:
         return nltk.ConfusionMatrix(gs, predictions)
 
     # Computes Confusion Matrix and returns, Precision, Recall, F-Measure, Accuaracy, and Confusion Matrix
-    def classifierPRF(self, posTokenizedPostsTest, negTokenizedPostsTest):
-        cm = self.classifierConfusionMatrix(posTokenizedPostsTest, negTokenizedPostsTest)
+    def classifierPRF(self, posTokenizedPostsTest, negTokenizedPostsTest, posLIWCPosts, negLIWCPosts):
+        cm = self.classifierConfusionMatrix(posTokenizedPostsTest, negTokenizedPostsTest, posLIWCPosts, negLIWCPosts)
         TP = cm['pos', 'pos']
         TN = cm['neg', 'neg']
         FP = cm['neg', 'pos']
         FN = cm['pos', 'neg']
-        precision = float(TP) / float(TP + FP)
-        recall = float(TP) / float(TP + FN)
-        FMeasure = (2.0 * precision * recall) / (precision + recall)
+        if (TP + FP) == 0:
+            precision = None
+        else:
+            precision = float(TP) / float(TP + FP)
+        if(TP + FN) == 0:
+            recall = None
+        else:
+            recall = float(TP) / float(TP + FN)
+        if (precision == None or recall == None or (precision + recall) == 0):
+            FMeasure = None
+        else:
+            FMeasure = (2.0 * precision * recall) / (precision + recall)
         Accuracy = float(TP + TN) / float(TP + TN + FP + FN)
         return (precision, recall, FMeasure, Accuracy, cm)
 
@@ -583,6 +651,22 @@ class SupervisedClassifier:
     ###
     # Collocation Feature Exploration
     ###
+    def trainBigramCollocations(self, negPost, posPost):
+        print "Constructing collocations"
+        allBigrams = {}
+
+        for uid in negPost:
+            allBigrams[uid] = BigramCollocationFinder.from_words(negPost[uid]).ngram_fd.items()
+
+        for uid in posPost:
+            allBigrams[uid] = BigramCollocationFinder.from_words(posPost[uid]).ngram_fd.items()
+
+        self.bigramVocab = self.getVocab(allBigrams)
+        #self.bigrams = allBigrams
+
+    def getBigramCollocation(self, post):
+        return BigramCollocationFinder.from_words(post).ngram_fd.items()
+
     def getVocab(self, ngrams):
         vocab = []
         for ngram in ngrams.values():
@@ -656,6 +740,84 @@ class SupervisedClassifier:
             for (uid1,uid2) in tableM:
                 line = str(uid1) + '\t' + str(uid2) + '\t' + str(tableM[(uid1, uid2)]) + '\n'
                 f.write(line)
+
+
+class LDAModeling:
+    def __init__(self, numTopics, trainingMode = "Pos"):
+        self.nTopic = numTopics
+        self.trainMode = trainingMode
+
+    def trainLDA(self, negPosts, posPosts, numPasses = 20):
+        print "LDA Modeling started"
+        negTexts = []
+        posTexts = []
+        for uid in negPosts:
+            negTexts.append(negPosts[uid])
+        for uid in posPosts:
+            if (self.trainMode ==  "Cmb"):
+                negTexts.append(posPosts[uid])
+            else:
+                posTexts.append(posPosts[uid])
+
+        if (self.trainMode == "Sep"):
+            self.negCorpus = [self.dictionary.doc2bow(text) for text in negTexts]
+            self.posCorpus = [self.dictionary.doc2bow(text) for text in posTexts]
+
+            self.negLdaModel = gensim.models.ldamodel.LdaModel(self.negCorpus, num_topics=self.nTopic, id2word=self.dictionary, passes=numPasses)
+            self.posLdaModel = gensim.models.ldamodel.LdaModel(self.posCorpus, num_topics=self.nTopic, id2word=self.dictionary, passes=numPasses)
+        elif (self.trainMode == "Pos"):
+            self.posCorpus = [self.dictionary.doc2bow(text) for text in posTexts]
+            self.posLdaModel = gensim.models.ldamodel.LdaModel(self.posCorpus, num_topics=self.nTopic,
+                                                               id2word=self.dictionary, passes=numPasses)
+        else:
+            self.negCorpus = [self.dictionary.doc2bow(text) for text in negTexts]
+            self.negLdaModel = gensim.models.ldamodel.LdaModel(self.negCorpus, num_topics=self.nTopic,
+                                                               id2word=self.dictionary, passes=numPasses)
+
+
+    def makeDictionary(self, trainPosPost, trainNegPost, devPosPost, devNegPost):
+        texts = []
+        for uid in trainNegPost:
+            texts.append(trainNegPost[uid])
+        for uid in trainPosPost:
+            texts.append(trainPosPost[uid])
+        for uid in devNegPost:
+            texts.append(devNegPost[uid])
+        for uid in devPosPost:
+            texts.append(devPosPost[uid])
+        self.dictionary = corpora.Dictionary(texts)
+
+    def getLDAResults(self, numWords):
+        if (self.trainMode == "Sep"):
+            negRes = self.negLdaModel.print_topics(num_topics=self.nTopic, num_words=numWords)
+            posRes = self.posLdaModel.print_topics(num_topics=self.nTopic, num_words=numWords)
+            return (negRes, posRes)
+        elif (self.trainMode == "Pos"):
+            posRes = self.posLdaModel.print_topics(num_topics=self.nTopic, num_words=numWords)
+            return (None, posRes)
+        else:
+            negRes = self.negLdaModel.print_topics(num_topics=self.nTopic, num_words=numWords)
+            return (negRes, None)
+
+    def getTopic(self, post):
+        postbow = self.dictionary.doc2bow(post)
+        if (self.trainMode == "Pos"):
+            res = self.posLdaModel.get_document_topics(postbow)
+            res.sort(key=itemgetter(1), reverse=True)
+            return (None, res)
+        elif (self.trainMode == "Sep"):
+            resN = self.negLdaModel.get_document_topics(postbow)
+            resN.sort(key=itemgetter(1), reverse=True)
+            resP = self.posLdaModel.get_document_topics(postbow)
+            resP.sort(key=itemgetter(1), reverse=True)
+            return (resN, resP)
+        else:
+            res = self.negLdaModel.get_document_topics(postbow)
+            res.sort(key=itemgetter(1), reverse=True)
+            return (res, None)
+
+    def getNumTopics(self):
+        return self.nTopic
 
 
 #
@@ -748,17 +910,17 @@ class MPQALoader:
         return mpqaTable
 
 if __name__ == "__main__":
-    random.seed(773)
+    #random.seed(773)
 
     data = DataLoader()
-    data.getRandomSample(1000, liwcConverted=True)
+    data.getRandomSample(10, fileType="Word")
     liwcLoader = LIWCProcessor()
     postHelperFuncs = PostProcessingHelpers()
 
     # -------------------------------------------------------------------------------------------------------------
     # ------------------------------------ Word Class -------------------------------------------------------------
     # -------------------------------------------------------------------------------------------------------------
-
+    """
 
     posLIWCPostProcess = PostProcessing(data.getLIWCPositivePosts())
     posLIWCPostProcess.concatLIWCPostsByUser()
@@ -770,9 +932,6 @@ if __name__ == "__main__":
 
     pLIWCPosts = postHelperFuncs.unwrapLIWCPost(posLIWCPostProcess.getConcatPostBodies())
     nLIWCPosts = postHelperFuncs.unwrapLIWCPost(negLIWCPostProcess.getConcatPostBodies())
-
-    #print postHelperFuncs.getEmoScoreForLIWCConvertedPosts(pLIWCPosts, liwcLoader)
-    #print postHelperFuncs.getEmoScoreForLIWCConvertedPosts(nLIWCPosts, liwcLoader)
 
     data.clearPosts()
     data.getRandomSample(500, setType='Test', liwcConverted=True)
@@ -788,13 +947,13 @@ if __name__ == "__main__":
     vocabulary = liwcLoader.getLIWCVocab()
 
     supervised_classifier = SupervisedClassifier(liwcLoader, vocabulary)
-    supervised_classifier.trainClassifier(pLIWCPosts, nLIWCPosts, "DTree")
+    supervised_classifier.trainClassifier(pLIWCPosts, nLIWCPosts, "Maxent")
 
     pr, rc, fm, ac, cm = supervised_classifier.classifierPRF(pDevLIWCPosts, nDevLIWCPosts)
     print (cm.pretty_format(sort_by_count=True, show_percents=True))
     print "Accuracy = " + str(ac) + ", Precision = " + str(pr) + ", Recall = " + str(rc) + ", F-Measure = " + str(fm)
-
     """
+
     # -------------------------------------------------------------------------------------------------------------
     # ------------------------------------ Unigram ---------------------------------------------------------------
     # -------------------------------------------------------------------------------------------------------------
@@ -804,30 +963,98 @@ if __name__ == "__main__":
     posPostProcess.concatPostsByUser()
     negPostProcess.concatPostsByUser()
 
+    posLIWCPostProcess = PostProcessing(data.getLIWCPositivePosts())
+    posLIWCPostProcess.concatLIWCPostsByUser()
+    negLIWCPostProcess = PostProcessing(data.getLIWCControlsPosts())
+    negLIWCPostProcess.concatLIWCPostsByUser()
+
+    pLIWCPosts = postHelperFuncs.unwrapLIWCPost(posLIWCPostProcess.getConcatPostBodies())
+    nLIWCPosts = postHelperFuncs.unwrapLIWCPost(negLIWCPostProcess.getConcatPostBodies())
+
     data.clearPosts()
-    data.getRandomSample(20, 'Dev')
+    data.getRandomSample(20, setType='Test', fileType="Word")
+
+    posDevLIWCPostProcess = PostProcessing(data.getLIWCPositivePosts())
+    posDevLIWCPostProcess.concatLIWCPostsByUser()
+    negDevLIWCPostProcess = PostProcessing(data.getLIWCControlsPosts())
+    negDevLIWCPostProcess.concatLIWCPostsByUser()
+
+    pDevLIWCPosts = postHelperFuncs.unwrapLIWCPost(posDevLIWCPostProcess.getConcatPostBodies())
+    nDevLIWCPosts = postHelperFuncs.unwrapLIWCPost(negDevLIWCPostProcess.getConcatPostBodies())
 
     posPostProcessDev = PostProcessing(data.getPositivePosts())
     negPostProcessDev = PostProcessing(data.getControlsPosts())
     posPostProcessDev.concatPostsByUser()
     negPostProcessDev.concatPostsByUser()
 
+    tpPostsTrain = postHelperFuncs.stemmPosts(postHelperFuncs.tokenizePosts(posPostProcess.getConcatPostBodies()))
+    tnPostsTrain = postHelperFuncs.stemmPosts(postHelperFuncs.tokenizePosts(negPostProcess.getConcatPostBodies()))
 
-    tpPostsTrain = postHelperFuncs.tokenizePosts(posPostProcess.getConcatPostBodies())
-    tnPostsTrain = postHelperFuncs.tokenizePosts(negPostProcess.getConcatPostBodies())
+    tpPostsDev = postHelperFuncs.stemmPosts(postHelperFuncs.tokenizePosts(posPostProcessDev.getConcatPostBodies()))
+    tnPostsDev = postHelperFuncs.stemmPosts(postHelperFuncs.tokenizePosts(negPostProcessDev.getConcatPostBodies()))
 
-    tpPostsDev = postHelperFuncs.tokenizePosts(posPostProcessDev.getConcatPostBodies())
-    tnPostsDev = postHelperFuncs.tokenizePosts(negPostProcessDev.getConcatPostBodies())
+    ldamodels = LDAModeling(20, "Cmb")
+    #ldamodels.makeDictionary(tpPostsTrain, tnPostsTrain, tpPostsDev, tnPostsDev)
+    #ldamodels.trainLDA(tnPostsTrain, tpPostsTrain)
+    #neglda, poslda = ldamodels.getLDAResults(20)
+    #print "Negative posts LDA:"
+    #for t, r in neglda:
+    #    print "Topic " + str(t) + " = " + r
+    #print "Positive posts LDA:"
+    #for t, r in poslda:
+    #    print "Topic " + str(t) + " = " + r
+
+    #print "Predictions:"
+    #print "Pos Posts"
+    #for uid in tpPostsDev:
+    #    if (tpPostsDev[uid] == []):
+    #        continue
+    #    print ldamodels.getTopic(tpPostsDev[uid])
+    #print "Neg Posts"
+    #for uid in tnPostsDev:
+    #    if (tnPostsDev[uid] == []):
+    #        continue
+    #    print ldamodels.getTopic(tnPostsDev[uid])
+
+
+
 
     vocabulary = postHelperFuncs.getVocabularyFromPosts(tpPostsTrain, tnPostsTrain, 1000)
 
-    supervised_classifier = SupervisedClassifier(liwcLoader, vocabulary)
-    supervised_classifier.trainClassifier(tpPostsTrain, tnPostsTrain, "NB")
+    print "Classifier DTree:"
 
-    pr, rc, fm, ac, cm = supervised_classifier.classifierPRF(tpPostsDev, tnPostsDev)
+    supervised_classifier = SupervisedClassifier(liwcLoader, vocabulary, ldamodels)
+    #supervised_classifier.trainBigramCollocations(tnPostsTrain, tpPostsTrain)
+    supervised_classifier.trainClassifier(tpPostsTrain, tnPostsTrain, pLIWCPosts, nLIWCPosts, classifierType="DTree")
+
+    pr, rc, fm, ac, cm = supervised_classifier.classifierPRF(tpPostsDev, tnPostsDev, pDevLIWCPosts, nDevLIWCPosts)
     print (cm.pretty_format(sort_by_count=True, show_percents=True))
     print "Accuracy = " + str(ac) + ", Precision = " + str(pr) + ", Recall = " + str(rc) + ", F-Measure = " + str(fm)
-    """
+
+    print "Classifier SVM:"
+    #supervised_classifier_SVM = SupervisedClassifier(liwcLoader, vocabulary, ldamodels)
+    supervised_classifier.trainClassifier(tpPostsTrain, tnPostsTrain, pLIWCPosts, nLIWCPosts, "SVM")
+
+    pr, rc, fm, ac, cm = supervised_classifier.classifierPRF(tpPostsDev, tnPostsDev, pDevLIWCPosts, nDevLIWCPosts)
+    print (cm.pretty_format(sort_by_count=True, show_percents=True))
+    print "Accuracy = " + str(ac) + ", Precision = " + str(pr) + ", Recall = " + str(rc) + ", F-Measure = " + str(fm)
+
+    print "Classifier NB:"
+    #supervised_classifier_NB = SupervisedClassifier(liwcLoader, vocabulary, ldamodels)
+    supervised_classifier.trainClassifier(tpPostsTrain, tnPostsTrain, pLIWCPosts, nLIWCPosts, "NB")
+
+    pr, rc, fm, ac, cm = supervised_classifier.classifierPRF(tpPostsDev, tnPostsDev, pDevLIWCPosts, nDevLIWCPosts)
+    print (cm.pretty_format(sort_by_count=True, show_percents=True))
+    print "Accuracy = " + str(ac) + ", Precision = " + str(pr) + ", Recall = " + str(rc) + ", F-Measure = " + str(fm)
+
+    print "Classifier Maxent:"
+    #supervised_classifier_ME = SupervisedClassifier(liwcLoader, vocabulary, ldamodels)
+    supervised_classifier.trainClassifier(tpPostsTrain, tnPostsTrain, pLIWCPosts, nLIWCPosts, "Maxent")
+
+    pr, rc, fm, ac, cm = supervised_classifier.classifierPRF(tpPostsDev, tnPostsDev, pDevLIWCPosts, nDevLIWCPosts)
+    print (cm.pretty_format(sort_by_count=True, show_percents=True))
+    print "Accuracy = " + str(ac) + ", Precision = " + str(pr) + ", Recall = " + str(rc) + ", F-Measure = " + str(fm)
+
     # -------------------------------------------------------------------------------------------------------------
     # ------------------------------------ Junk -------------------------------------------------------------------
     # -------------------------------------------------------------------------------------------------------------
