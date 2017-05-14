@@ -39,6 +39,16 @@ filterSubreddit = ["Anger", "BPD", "EatingDisorders", "MMFB", "StopSelfHarm", "S
                    "depression", "feelgood", "getting over it", "hardshipmates", "mentalhealth", "psychoticreddit",
                    "ptsd", "rapecounseling", "socialanxiety", "survivorsofabuse", "traumatoolbox"]
 
+
+similarPositives = [50583, 46515, 40386, 36662, 36229, 35064, 26069, 26015, 28419, 18947, 16451, 16360, 15334, 14883, 13231,
+                    10317, 9889, 9768, 8877, 7971, 5047, 4447, 1936, 1104, 741]
+
+filterPostsAfterSW = False
+
+firstPersonPronouns = ['i', 'me', 'myself', 'mine', 'my', 'we', 'us', 'our', 'ours', 'ourselves']
+allProunouns = firstPersonPronouns + ['you', 'yours', 'your', 'yourself', 'yourselves', 'he', 'she', 'his', 'her',
+                                      'hers', 'himself', 'herself', 'they', 'them', 'their', 'theirs', 'it', 'its',
+                                      'themselves', 'itself']
 ###
 # File I/O
 ###
@@ -70,10 +80,6 @@ class DataLoader:
             with open(join(positivesPath,filename), 'r') as fc:
                 self.positivesIDs[dataset] = [int(line) for line in fc]
 
-        #print "Train --> Neg: " + str(len(self.controlsIDs['Train'])) + ", Pos: " + str(len(self.positivesIDs['Train']))
-        #print "Dev --> Neg: " + str(len(self.controlsIDs['Dev'])) + ", Pos: " + str(len(self.positivesIDs['Dev']))
-        #print "Test --> Neg: " + str(len(self.controlsIDs['Test'])) + ", Pos: " + str(len(self.positivesIDs['Test']))
-
     def getPostFilename(self, userID):
         return str(abs(math.floor(userID / 2000.0))).split('.')[0]
 
@@ -89,6 +95,12 @@ class DataLoader:
         if (fileType != "LIWC"):
             self.loadPosts(posSamples, negSamples, sredditFilter)
 
+    def readSimilarPositives(self, sredditFilter=True, fileType = "Both"):
+        if (fileType != "Word"):
+            self.loadLIWCConvertedPosts(similarPositives, None, sredditFilter)
+        if (fileType != "LIWC"):
+            self.loadPosts(similarPositives, None, sredditFilter)
+
     def readAllSamples(self, setType = "Train", sredditFilter=True, fileType = "Both"):
         if (fileType != "Word"):
             self.loadLIWCConvertedPosts(self.positivesIDs[setType], self.controlsIDs[setType], sredditFilter)
@@ -101,6 +113,7 @@ class DataLoader:
         Optionally filters using a set of user ids
         """
         posts = []
+        skipusers = []
         with open(filename, 'r') as f:
             for line in f:
                 # Split on only the first 5 tabs (sometimes post bodies have tabs)
@@ -109,6 +122,10 @@ class DataLoader:
                 if len(segs) == 5: segs.append('')
                 ps = PostsStruct(segs[0], int(segs[1]), int(segs[2]), segs[3], segs[4], segs[5])
                 if users is None or ps.userID in users:
+                    if (ps.subReddit == "SuicideWatch" and filterPostsAfterSW == True):
+                        skipusers += [ps.userID]
+                    if (ps.userID in skipusers):
+                        continue
                     if (sredditFilter == True and ps.subReddit not in filterSubreddit):
                         posts.append(ps)
         return posts
@@ -119,36 +136,38 @@ class DataLoader:
         Caches posts in a pickle object
         """
         # Check pickle cache
-        pickle_filename = join(picklePath, str(hash(tuple(posUsers + negUsers))) + ".pickle")
-        if isfile(pickle_filename):
-            print 'Loading posts from cache'
-            with open(pickle_filename, 'rb') as f:
-                return pickle.load(f)
+        #pickle_filename = join(picklePath, str(hash(tuple(posUsers + negUsers))) + ".pickle")
+        #if isfile(pickle_filename):
+        #    print 'Loading posts from cache'
+        #    with open(pickle_filename, 'rb') as f:
+        #        return pickle.load(f)
 
-        postFilenames = []
-        # Read positive posts (filenames: 0.txt...25.txt)
-        for puid in posUsers:
-            tmp = self.getPostFilename(puid)
-            if tmp not in postFilenames:
-                postFilenames += [tmp]
-        for filename in postFilenames:
-            posFilename = join(positivesPath, filename + '.posts')
-            self.posPosts += self.readPosts(posFilename, posUsers, subRedditFilter)
+        if posUsers != None:
+            postFilenames = []
+            # Read positive posts (filenames: 0.txt...25.txt)
+            for puid in posUsers:
+                tmp = self.getPostFilename(puid)
+                if tmp not in postFilenames:
+                    postFilenames += [tmp]
+            for filename in postFilenames:
+                posFilename = join(positivesPath, filename + '.posts')
+                self.posPosts += self.readPosts(posFilename, posUsers, subRedditFilter)
 
         # Read control posts (filenames: 1.txt...31.txt)
-        postFilenames = []
+        if negUsers != None:
+            postFilenames = []
 
-        for nuid in negUsers:
-            tmp = self.getPostFilename(nuid)
-            if tmp not in postFilenames:
-                postFilenames += [tmp]
-        for filename in postFilenames:
-            negFilename = join(controlsPath, filename + '.posts')
-            self.negPosts += self.readPosts(negFilename, negUsers, subRedditFilter)
+            for nuid in negUsers:
+                tmp = self.getPostFilename(nuid)
+                if tmp not in postFilenames:
+                    postFilenames += [tmp]
+            for filename in postFilenames:
+                negFilename = join(controlsPath, filename + '.posts')
+                self.negPosts += self.readPosts(negFilename, negUsers, subRedditFilter)
 
         # Write to pickle cache
-        with open(pickle_filename, 'wb') as f:
-            pickle.dump((self.posPosts, self.negPosts), f, protocol=pickle.HIGHEST_PROTOCOL)
+        #with open(pickle_filename, 'wb') as f:
+        #    pickle.dump((self.posPosts, self.negPosts), f, protocol=pickle.HIGHEST_PROTOCOL)
 
     def getPositivePosts(self):
         return self.posPosts
@@ -163,29 +182,32 @@ class DataLoader:
         return self.negLIWCPosts
 
     def loadLIWCConvertedPosts(self, posUsers, negUsers, subRedditFilter = True):
-        postFilenames = []
-        # Read positive posts (filenames: 0.txt...25.txt)
-        for puid in posUsers:
-            tmp = self.getPostFilename(puid)
-            if tmp not in postFilenames:
-                postFilenames += [tmp]
-        for filename in postFilenames:
-            posFilename = join(positivesPath, filename + '.pliwc')
-            self.posLIWCPosts += self.readLIWCConvertedPosts(posFilename, posUsers, subRedditFilter)
+        if posUsers != None:
+            postFilenames = []
+            # Read positive posts (filenames: 0.txt...25.txt)
+            for puid in posUsers:
+                tmp = self.getPostFilename(puid)
+                if tmp not in postFilenames:
+                    postFilenames += [tmp]
+            for filename in postFilenames:
+                posFilename = join(positivesPath, filename + '.pliwc')
+                self.posLIWCPosts += self.readLIWCConvertedPosts(posFilename, posUsers, subRedditFilter)
 
-        # Read control posts (filenames: 1.txt...31.txt)
-        postFilenames = []
-        for nuid in negUsers:
-            tmp = self.getPostFilename(nuid)
-            if tmp not in postFilenames:
-                postFilenames += [tmp]
-        for filename in postFilenames:
-            negFilename = join(controlsPath, filename + '.pliwc')
-            self.negLIWCPosts += self.readLIWCConvertedPosts(negFilename, negUsers, subRedditFilter)
+        if negUsers != None:
+            # Read control posts (filenames: 1.txt...31.txt)
+            postFilenames = []
+            for nuid in negUsers:
+                tmp = self.getPostFilename(nuid)
+                if tmp not in postFilenames:
+                    postFilenames += [tmp]
+            for filename in postFilenames:
+                negFilename = join(controlsPath, filename + '.pliwc')
+                self.negLIWCPosts += self.readLIWCConvertedPosts(negFilename, negUsers, subRedditFilter)
 
 
     def readLIWCConvertedPosts(self, filename, users=None, sredditFilter=True):
         posts = []
+        skipusers = []
         with open(filename, 'r') as f:
             for line in f:
                 postTitle = []
@@ -210,7 +232,13 @@ class DataLoader:
                     postBody += [(int(liwcBody[0]), int(liwcBody[1]))]
                 ps = PostsStruct(segs[0], int(segs[1]), int(segs[2]), segs[3], postTitle, postBody)
                 if users is None or ps.userID in users:
+                    if (ps.subReddit == "SuicideWatch" and filterPostsAfterSW == True):
+                        skipusers += [ps.userID]
+                    if (ps.userID in skipusers):
+                        continue
                     if (sredditFilter == True and ps.subReddit not in filterSubreddit):
+                        posts.append(ps)
+                    elif (sredditFilter == False):
                         posts.append(ps)
         return posts
 
@@ -221,9 +249,16 @@ class PostProcessing:
     def __init__(self, posts):
         self.rawPosts = posts
 
-    def concatPosts(self, rawPosts):
+    def concatPosts(self):
         """Concatenates all of the post bodies"""
         self.concatinatedPosts = ' '.join((p.postBody for p in self.rawPosts))
+
+    def concatLIWCPosts(self):
+        conRes = {}
+        conRes[1] = []
+        for p in self.rawPosts:
+            conRes[1] += p.postBody
+        self.concatinatedPosts = conRes
 
     def concatPostsByUser(self):
         """Concatenates all of the post bodies by user id"""
@@ -265,6 +300,48 @@ class PostProcessing:
     def getConcatPostTitles(self):
         return self.concatinatedTitles
 
+    def separatePostCorpusWrtSW(self):
+        """Concatenates all of the post bodies by user id  and returns 2 series, post before and after SuicideWatch"""
+        beforeCorpus = defaultdict(str)
+        afterCorpus = defaultdict(str)
+        swPostSeen = {}
+        for i in range(0, len(self.rawPosts)):
+            p = self.rawPosts[i]
+            if p.userID not in swPostSeen:
+                swPostSeen[p.userID] = False
+
+            if (swPostSeen[p.userID]):
+                if p.subReddit not in filterSubreddit:
+                    afterCorpus[p.userID] += p.postBody + ' '
+            else:
+                if p.subReddit == "SuicideWatch":
+                    swPostSeen[p.userID] = True
+                if p.subReddit not in filterSubreddit:
+                    beforeCorpus[p.userID] += p.postBody + ' '
+        return (beforeCorpus, afterCorpus)
+
+    def separateLIWCPostCorpusWrtSW(self):
+        """Concatenates all of the post bodies by user id  and returns 2 series, post before and after SuicideWatch"""
+        beforeCorpus = {}
+        afterCorpus = {}
+        swPostSeen = {}
+        for i in range(0, len(self.rawPosts)):
+            p = self.rawPosts[i]
+            if p.userID not in swPostSeen:
+                swPostSeen[p.userID] = False
+            if p.userID not in beforeCorpus:
+                beforeCorpus[p.userID] = []
+                afterCorpus[p.userID] = []
+
+            if (swPostSeen[p.userID]):
+                if p.subReddit not in filterSubreddit:
+                    afterCorpus[p.userID] += p.postBody
+            else:
+                if p.subReddit == "SuicideWatch":
+                    swPostSeen[p.userID] = True
+                if p.subReddit not in filterSubreddit:
+                    beforeCorpus[p.userID] += p.postBody
+        return (beforeCorpus, afterCorpus)
 
 class PostProcessingHelpers:
 
@@ -485,6 +562,10 @@ class SupervisedClassifier:
         self.vocab = vocab
         self.helpers = PostProcessingHelpers()
         self.ldaModel = lda
+        self.truePositives = None
+
+    def addTruPositive(self, tp):
+        self.truePositives = tp
 
     # Feature fromat:
     # ({'Feature name' : Feature value}, class)
@@ -537,21 +618,31 @@ class SupervisedClassifier:
                 feature_set[tag] = val
         return feature_set
 
+    def similarityWithTPFeatureSet(self, liwcUnWrappedSentence):
+        feature_set = {}
+        res = self.collocationsFeature(self.truePositives, liwcUnWrappedSentence, vocab=self.vocab)
+        if res > 1.0:
+            res = 1.0
+        feature_set["SimTP"] = int(round(res * 100.0))
+        return feature_set
+
     def getFeatureSetForAllPosts(self, posTokenizedPosts, negTokenizedPosts, posLIWCPosts, negLIWCPosts):
         feature_set = []
-        for uid in posTokenizedPosts:
+        #for uid in posTokenizedPosts:
             #feature_set += [(self.unigramFeatureSet(posTokenizedPosts[uid]), 'pos')]
-            feature_set += [(self.ldaTopicModelFeatureSet(posTokenizedPosts[uid]), 'pos')]
+            #feature_set += [(self.ldaTopicModelFeatureSet(posTokenizedPosts[uid]), 'pos')]
             #feature_set += [(self.bigramCollocationFeatureSet(posTokenizedPosts[uid]), 'pos')]
-        #for uid in posLIWCPosts:
-        #    feature_set += [(self.unigramFeatureSet(posLIWCPosts[uid], liwcFeature=True), 'pos')]
+        for uid in posLIWCPosts:
+            #feature_set += [(self.unigramFeatureSet(posLIWCPosts[uid], liwcFeature=True), 'pos')]
+            feature_set += [(self.similarityWithTPFeatureSet(posLIWCPosts[uid]), 'pos')]
         #    feature_set += [(self.emotionScoreFeatureSet(posLIWCPosts[uid]), 'pos')]
-        for uid in negTokenizedPosts:
+        #for uid in negTokenizedPosts:
             #feature_set += [(self.bigramCollocationFeatureSet(negTokenizedPosts[uid]), 'neg')]
-            feature_set += [(self.unigramFeatureSet(negTokenizedPosts[uid]), 'neg')]
+            #feature_set += [(self.unigramFeatureSet(negTokenizedPosts[uid]), 'neg')]
             #feature_set += [(self.ldaTopicModelFeatureSet(negTokenizedPosts[uid]), 'neg')]
-        #for uid in negLIWCPosts:
-        #    feature_set += [(self.unigramFeatureSet(negLIWCPosts[uid], liwcFeature=True), 'neg')]
+        for uid in negLIWCPosts:
+            #feature_set += [(self.unigramFeatureSet(negLIWCPosts[uid], liwcFeature=True), 'neg')]
+            feature_set += [(self.similarityWithTPFeatureSet(negLIWCPosts[uid]), 'neg')]
         #    feature_set += [(self.emotionScoreFeatureSet(negLIWCPosts[uid]), 'neg')]
 
         random.shuffle(feature_set)
@@ -675,7 +766,31 @@ class SupervisedClassifier:
                     vocab += [word]
         return vocab
 
-    def collocations(self, ngram, tokenizedPosPosts, tokenizedNegPosts, vocab = None):
+    def collocationsFeature(self, tokenizedPosPost, tokenizedNegPost, vocab = None):
+        """
+        Generates all bigram collocations and computes their KL-divergence
+        """
+        allBigrams = {}
+        allLengths = {}
+
+        # Count n-grams
+        gram = nltk.FreqDist(tokenizedPosPost).items()
+
+        allLengths[1] = math.fsum(v for (g, v) in gram)
+        allBigrams[1] = gram
+
+        gram = nltk.FreqDist(tokenizedNegPost).items()
+
+        allLengths[2] = math.fsum(v for (g, v) in gram)
+        allBigrams[2] = gram
+
+        # Build`token vocabulary
+        if (vocab == None):
+            vocab = self.getVocab(allBigrams)
+        return self.calcAverageD(allBigrams[1], allBigrams[2], vocab, allLengths[1], allLengths[2])
+
+
+    def collocations(self, ngram, tokenizedPosPosts, tokenizedNegPosts, vocab = None, compareType = "AllvAll"):
         """
         Generates all bigram collocations and computes their KL-divergence
         """
@@ -723,16 +838,36 @@ class SupervisedClassifier:
 
         print "Calculating D values."
         Mt = {}
-        for (class1, uid1) in allBigrams:
+
+        if (compareType == "AllvAll"):
+            for (class1, uid1) in allBigrams:
+                for (class2, uid2) in allBigrams:
+                    if (uid1, uid2) in Mt:
+                        ansD = Mt[(uid1,uid2)]
+                    elif (uid2, uid1) in Mt:
+                        ansD = Mt[(uid2, uid1)]
+                    else:
+                        Mt[(uid1, uid2)] = self.calcAverageD(allBigrams[(class1,uid1)], allBigrams[(class2,uid2)], vocab, allLengths[uid1], allLengths[uid2])
+                        ansD = Mt[(uid1,uid2)]
+                    print "D (" + str(uid1) + " || " + str(uid2) + " ) = " + str(ansD)
+        elif (compareType == "1vAll"):
+            theoneClass = 'pos'
+            theoneID = 1
+            for (class1, uid1) in allBigrams:
+                if uid1 == 1:
+                    theoneClass = class1
+                    theoneID = uid1
+                    break
             for (class2, uid2) in allBigrams:
-                if (uid1, uid2) in Mt:
-                    ansD = Mt[(uid1,uid2)]
-                elif (uid2, uid1) in Mt:
-                    ansD = Mt[(uid2, uid1)]
-                else:
-                    Mt[(uid1, uid2)] = self.liwcProcesses.calcAverageD(allBigrams[(class1,uid1)], allBigrams[(class2,uid2)], vocab, allLengths[uid1], allLengths[uid2])
-                    ansD = Mt[(uid1,uid2)]
-                print "D (" + str(uid1) + " || " + str(uid2) + " ) = " + str(ansD)
+                Mt[(theoneID, uid2)] = self.calcAverageD(allBigrams[(theoneClass, theoneID)], allBigrams[(class2,uid2)],
+                                                         vocab, allLengths[theoneID], allLengths[uid2])
+        else: # "SameID"
+            for (class1, uid1) in allBigrams:
+                for (class2, uid2) in allBigrams:
+                    if (uid1 == uid2 and class1 != class2):
+                        Mt[(uid1, uid2)] = self.calcAverageD(allBigrams[(class1, uid1)],
+                                                                           allBigrams[(class2, uid2)], vocab,
+                                                                           allLengths[uid1], allLengths[uid2])
         return Mt
 
     def saveCollocations(self, filename, tableM):
@@ -741,6 +876,37 @@ class SupervisedClassifier:
                 line = str(uid1) + '\t' + str(uid2) + '\t' + str(tableM[(uid1, uid2)]) + '\n'
                 f.write(line)
 
+    def firstPersonScore(self, tokenizedSentence):
+        fpron = 0
+        allpron = 0
+        for word in tokenizedSentence:
+            if word in firstPersonPronouns:
+                fpron += 1
+                allpron += 1
+            elif word in allProunouns:
+                allpron += 1
+        if allpron == 0:
+            return 0
+        return (float(fpron) / float(allpron))
+
+    def firstPersonSocreForAllPosts(self, posPost, negPost):
+        scoreRes = {}
+        for uid in posPost:
+            scoreRes[uid] = self.firstPersonScore(posPost[uid])
+        for uid in negPost:
+            scoreRes[uid] = self.firstPersonScore(negPost[uid])
+        return scoreRes
+
+    def savefirstPersonScores(self, fScores, filename):
+        with open(filename, "w") as f:
+            for uid in fScores:
+                if uid > 0:
+                    line = str(uid) + '\t' + str(fScores[uid]) + '\n'
+                    f.write(line)
+            for uid in fScores:
+                if uid < 0:
+                    line = str(uid) + '\t' + str(fScores[uid]) + '\n'
+                    f.write(line)
 
 class LDAModeling:
     def __init__(self, numTopics, trainingMode = "Pos"):
@@ -913,9 +1079,100 @@ if __name__ == "__main__":
     #random.seed(773)
 
     data = DataLoader()
-    data.getRandomSample(10, fileType="Word")
+    data.getRandomSample(1000, fileType="Word", sredditFilter=True)
     liwcLoader = LIWCProcessor()
     postHelperFuncs = PostProcessingHelpers()
+    ldamodels = LDAModeling(20, "Cmb")
+
+    posPostProcess = PostProcessing(data.getPositivePosts())
+    negPostProcess = PostProcessing(data.getControlsPosts())
+    posPostProcess.concatPostsByUser()
+    negPostProcess.concatPostsByUser()
+
+    tpPostsTrain = postHelperFuncs.tokenizePosts(posPostProcess.getConcatPostBodies(), filterStopWords=False)
+    tnPostsTrain = postHelperFuncs.tokenizePosts(negPostProcess.getConcatPostBodies(), filterStopWords=False)
+
+    supervised_classifier = SupervisedClassifier(liwcLoader, vocab=liwcLoader.LIWC_Classes, lda=ldamodels)
+    fscores = supervised_classifier.firstPersonSocreForAllPosts(tpPostsTrain, tnPostsTrain)
+    supervised_classifier.savefirstPersonScores(fscores, "results/fperson.txt")
+
+    """
+    data.readSimilarPositives(fileType="LIWC")
+    knownpositive = PostProcessing(data.getLIWCPositivePosts())
+    knownpositive.concatLIWCPosts()
+    knownPositivePost = postHelperFuncs.unwrapLIWCPost(knownpositive.getConcatPostBodies())
+
+    data.clearPosts()
+    data.getRandomSample(1000, fileType="LIWC", sredditFilter=True)
+
+    posLIWCPostProcess = PostProcessing(data.getLIWCPositivePosts())
+    posLIWCPostProcess.concatLIWCPostsByUser()
+
+    negLIWCPostProcess = PostProcessing(data.getLIWCControlsPosts())
+    negLIWCPostProcess.concatLIWCPostsByUser()
+
+    pLIWCPosts = postHelperFuncs.unwrapLIWCPost(posLIWCPostProcess.getConcatPostBodies())
+    nLIWCPosts = postHelperFuncs.unwrapLIWCPost(negLIWCPostProcess.getConcatPostBodies())
+
+    data.clearPosts()
+    data.getRandomSample(500, setType='Test', fileType="LIWC")
+
+    posDevLIWCPostProcess = PostProcessing(data.getLIWCPositivePosts())
+    posDevLIWCPostProcess.concatLIWCPostsByUser()
+    negDevLIWCPostProcess = PostProcessing(data.getLIWCControlsPosts())
+    negDevLIWCPostProcess.concatLIWCPostsByUser()
+
+    pDevLIWCPosts = postHelperFuncs.unwrapLIWCPost(posDevLIWCPostProcess.getConcatPostBodies())
+    nDevLIWCPosts = postHelperFuncs.unwrapLIWCPost(negDevLIWCPostProcess.getConcatPostBodies())
+
+    """
+
+    #beforeCorpus, afterCorpus = posLIWCPostProcess.separateLIWCPostCorpusWrtSW()
+
+    #beforeLIWCPosts = postHelperFuncs.unwrapLIWCPost(beforeCorpus)
+    #afterLIWCPosts = postHelperFuncs.unwrapLIWCPost(afterCorpus)
+
+    #res = supervised_classifier.collocations(1, knownPositivePost, pLIWCPosts, compareType="1vAll")
+    #res = supervised_classifier.collocations(1, beforeCorpus, afterCorpus, compareType="SameID")
+    #supervised_classifier.saveCollocations("results/simneg.txt", res)
+    """
+    supervised_classifier = SupervisedClassifier(liwcLoader, vocab=liwcLoader.LIWC_Classes, lda=ldamodels)
+    supervised_classifier.addTruPositive(knownPositivePost[1])
+
+    supervised_classifier.trainClassifier(None, None, pLIWCPosts, nLIWCPosts, classifierType="DTree")
+
+    pr, rc, fm, ac, cm = supervised_classifier.classifierPRF(None, None, pDevLIWCPosts, nDevLIWCPosts)
+    print (cm.pretty_format(sort_by_count=True, show_percents=True))
+    print "Accuracy = " + str(ac) + ", Precision = " + str(pr) + ", Recall = " + str(rc) + ", F-Measure = " + str(fm)
+
+    print "Classifier SVM:"
+    supervised_classifier_SVM = SupervisedClassifier(liwcLoader, vocab=liwcLoader.LIWC_Classes, lda=ldamodels)
+    supervised_classifier_SVM.addTruPositive(knownPositivePost[1])
+
+    supervised_classifier_SVM.trainClassifier(None, None, pLIWCPosts, nLIWCPosts, "SVM")
+
+    pr, rc, fm, ac, cm = supervised_classifier_SVM.classifierPRF(None, None, pDevLIWCPosts, nDevLIWCPosts)
+    print (cm.pretty_format(sort_by_count=True, show_percents=True))
+    print "Accuracy = " + str(ac) + ", Precision = " + str(pr) + ", Recall = " + str(rc) + ", F-Measure = " + str(fm)
+
+    print "Classifier NB:"
+    supervised_classifier_NB = SupervisedClassifier(liwcLoader, vocab=liwcLoader.LIWC_Classes, lda=ldamodels)
+    supervised_classifier_NB.addTruPositive(knownPositivePost[1])
+    supervised_classifier_NB.trainClassifier(None, None, pLIWCPosts, nLIWCPosts, "NB")
+
+    pr, rc, fm, ac, cm = supervised_classifier_NB.classifierPRF(None, None, pDevLIWCPosts, nDevLIWCPosts)
+    print (cm.pretty_format(sort_by_count=True, show_percents=True))
+    print "Accuracy = " + str(ac) + ", Precision = " + str(pr) + ", Recall = " + str(rc) + ", F-Measure = " + str(fm)
+
+    print "Classifier Maxent:"
+    supervised_classifier_ME = SupervisedClassifier(liwcLoader, vocab=liwcLoader.LIWC_Classes, lda=ldamodels)
+    supervised_classifier_ME.addTruPositive(knownPositivePost[1])
+    supervised_classifier_ME.trainClassifier(None, None, pLIWCPosts, nLIWCPosts, "Maxent")
+
+    pr, rc, fm, ac, cm = supervised_classifier_ME.classifierPRF(None, None, pDevLIWCPosts, nDevLIWCPosts)
+    print (cm.pretty_format(sort_by_count=True, show_percents=True))
+    print "Accuracy = " + str(ac) + ", Precision = " + str(pr) + ", Recall = " + str(rc) + ", F-Measure = " + str(fm)
+    """
 
     # -------------------------------------------------------------------------------------------------------------
     # ------------------------------------ Word Class -------------------------------------------------------------
@@ -957,7 +1214,7 @@ if __name__ == "__main__":
     # -------------------------------------------------------------------------------------------------------------
     # ------------------------------------ Unigram ---------------------------------------------------------------
     # -------------------------------------------------------------------------------------------------------------
-
+    """
     posPostProcess = PostProcessing(data.getPositivePosts())
     negPostProcess = PostProcessing(data.getControlsPosts())
     posPostProcess.concatPostsByUser()
@@ -972,7 +1229,7 @@ if __name__ == "__main__":
     nLIWCPosts = postHelperFuncs.unwrapLIWCPost(negLIWCPostProcess.getConcatPostBodies())
 
     data.clearPosts()
-    data.getRandomSample(20, setType='Test', fileType="Word")
+    data.getRandomSample(50, setType='Test', fileType="LIWC")
 
     posDevLIWCPostProcess = PostProcessing(data.getLIWCPositivePosts())
     posDevLIWCPostProcess.concatLIWCPostsByUser()
@@ -993,7 +1250,8 @@ if __name__ == "__main__":
     tpPostsDev = postHelperFuncs.stemmPosts(postHelperFuncs.tokenizePosts(posPostProcessDev.getConcatPostBodies()))
     tnPostsDev = postHelperFuncs.stemmPosts(postHelperFuncs.tokenizePosts(negPostProcessDev.getConcatPostBodies()))
 
-    ldamodels = LDAModeling(20, "Cmb")
+    """
+
     #ldamodels.makeDictionary(tpPostsTrain, tnPostsTrain, tpPostsDev, tnPostsDev)
     #ldamodels.trainLDA(tnPostsTrain, tpPostsTrain)
     #neglda, poslda = ldamodels.getLDAResults(20)
@@ -1017,7 +1275,7 @@ if __name__ == "__main__":
     #    print ldamodels.getTopic(tnPostsDev[uid])
 
 
-
+    """
 
     vocabulary = postHelperFuncs.getVocabularyFromPosts(tpPostsTrain, tnPostsTrain, 1000)
 
@@ -1054,6 +1312,8 @@ if __name__ == "__main__":
     pr, rc, fm, ac, cm = supervised_classifier.classifierPRF(tpPostsDev, tnPostsDev, pDevLIWCPosts, nDevLIWCPosts)
     print (cm.pretty_format(sort_by_count=True, show_percents=True))
     print "Accuracy = " + str(ac) + ", Precision = " + str(pr) + ", Recall = " + str(rc) + ", F-Measure = " + str(fm)
+
+    """
 
     # -------------------------------------------------------------------------------------------------------------
     # ------------------------------------ Junk -------------------------------------------------------------------
