@@ -21,4 +21,9 @@ nd = read.table("neg.delta.txt")
 
 hist(as.numeric(pp$V1), breaks=c(seq(-8000,100,100)), col=rgb(0.5,0.5,1.0,0.5), xlab="positive language model log-prob", xlim=c(-3000,0), ylim=c(0,20))
 hist(as.numeric(np$V1), breaks=c(seq(-8000,100,100)), col=rgb(1,.5,.5,0.5), xlab="positive language model log-prob", xlim=c(-3000,0), ylim=c(0,20),add=T)
+legend("topright", c("Positives", "Control"), col=c(rgb(0.5,0.5,1.0,0.5),rgb(1,.5,.5,0.5)), lwd=10)
+
+wilcox.test(pp$V1, np$V1)
+wilcox.test(pn$V1, nn$V1)
+wilcox.test(pd$V1, nd$V1)
 ```
