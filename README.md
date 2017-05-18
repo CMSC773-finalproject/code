@@ -17,7 +17,6 @@ Code is written sequentially so just implementing it gives the sequential result
   -trains the classifiers with train data and tests the classifier against test data.
   
  Final output is Precision, recall and f-1 scores along with confusion matrix for time-frame as feature. 
- FYI: Two merge files were also included in this git location
 
 
 ### Colin's R commands
