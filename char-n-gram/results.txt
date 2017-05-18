@@ -1,0 +1,14 @@
+Training SVM!
+[({'neg': -55, 'pos': -64}, 'pos'), ({'neg': 0, 'pos': 0}, 'neg'), ({'neg': -10, 'pos': -12}, 'neg'), ({'neg': -5, 'pos': -5}, 'neg'), ({'neg': -4, 'pos': -5}, 'pos'), ({'neg': 0, 'pos': 0}, 'neg'), ({'neg': -8, 'pos': -10}, 'neg'), ({'neg': -5, 'pos': -6}, 'pos'), ({'neg': -13, 'pos': -16}, 'neg'), ({'neg': 1, 'pos': 1}, 'neg')]
+[({'neg': 1, 'pos': 1}, 'neg'), ({'neg': 0, 'pos': 0}, 'neg'), ({'neg': -35, 'pos': -42}, 'pos'), ({'neg': -4, 'pos': -5}, 'pos'), ({'neg': -38, 'pos': -44}, 'pos'), ({'neg': 1, 'pos': 1}, 'neg'), ({'neg': 0, 'pos': 0}, 'neg'), ({'neg': -1, 'pos': -1}, 'neg'), ({'neg': -16, 'pos': -18}, 'pos'), ({'neg': -3, 'pos': -3}, 'neg')]
+    |      n      p |
+    |      e      o |
+    |      g      s |
+----+---------------+
+neg | <31.7%> 18.3% |
+pos |  24.2% <25.7%>|
+----+---------------+
+(row = reference; col = test)
+
+Accuracy = 0.574574574575, Precision = 0.584090909091, Recall = 0.51503006012, F-Measure = 0.547390841321
+

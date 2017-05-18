@@ -7,7 +7,7 @@ import json
 import code
 import codecs
 
-from classifier import DataLoader
+from classifier import DataLoader, LIWCProcessor
 
 def get_desc(subreddit):
     headers = {'User-agent': 'cmsc773 colink@umd.edu'}
@@ -71,3 +71,18 @@ if __name__ == '__main__':
                     desc = get_desc(subreddit.strip())
                     cleaned_desc = clean_desc(desc)
                     dsc_f.write("%s\n" % cleaned_desc)
+    elif len(sys.argv) == 4 and sys.argv[1] == "liwc":
+        """
+        Usage:
+        $ python subreddit.py liwc descriptions.txt subreddits-liwc.txt
+
+        Converts descriptions to LIWC
+        """
+        with open(sys.argv[2], "r") as dsc_f:
+            with codecs.open(sys.argv[3],"w",'utf-8') as liwc_f:
+                liwcLoader = LIWCProcessor()
+                liwcLoader.loadLIWC()
+                for desc in dsc_f:
+                    liwc = liwcLoader.sentToLIWC(desc.strip(), False)
+                    print liwc
+                    liwc_f.write("%s\n" % liwc)

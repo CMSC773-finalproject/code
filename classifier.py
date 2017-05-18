@@ -2,7 +2,7 @@
 import pdb
 import nltk
 from nltk.corpus import stopwords
-from nltk.stem import WordNetLemmatizer
+from nltk.stem import PorterStemmer, WordNetLemmatizer
 from nltk.collocations import *
 import nltk.classify
 import string
@@ -16,7 +16,7 @@ import random
 from os.path import join,isfile
 import pickle
 from itertools import chain
-from sklearn.svm import LinearSVC
+from sklearn.svm import *
 
 controlsPath = "controls/"
 positivesPath = "positives/"
@@ -30,7 +30,7 @@ PostsStruct = namedtuple("PostsStruct", "postID userID timeStamp subReddit postT
 stopws = stopwords.words('english')
 # TODO: does string.punctuation need to be converted to unicode?
 stopws.extend(string.punctuation)
-stopws.extend(u"'s 're n't 'm 've 'd '' 't --".split())
+stopws.extend(u"'s 're n't 'm 've 'd '' ` 't --".split())
 
 filterSubreddit = ["Anger", "BPD", "EatingDisorders", "MMFB", "StopSelfHarm", "SuicideWatch", "addiction", "alcoholism",
                    "depression", "feelgood", "getting over it", "hardshipmates", "mentalhealth", "psychoticreddit",
@@ -274,12 +274,24 @@ class PostProcessing:
         return vocab
 
     @staticmethod
-    def tokenizePosts(posts, filterStopWords = True):
+    def tokenizePosts(posts, filterStopWords = True, lemmatize=False):
         tokenTable = {}
+        stemmer = WordNetLemmatizer()
         for uid in posts:
             tokenTable[uid] = nltk.word_tokenize(posts[uid].lower().decode('utf-8'))
             if (filterStopWords):
                 tokenTable[uid] = [t for t in tokenTable[uid] if t not in stopws and t != '']
+            if lemmatize:
+                tmp = []
+                for t in tokenTable[uid]:
+                    if len(t) > 2:
+                        try:
+                            tmp.append(stemmer.lemmatize(t))
+                        except:
+                            pdb.set_trace()
+                    else:
+                        tmp.append(t)
+                tokenTable[uid] = tmp
         return tokenTable
 
     @staticmethod
@@ -479,7 +491,7 @@ class SupervisedClassifier:
 
     def ngramFeatureSet(self, sentence):
         pos,neg = self.ngramclassifier.prob(sentence)
-        return {"pos": pos, "neg":neg}
+        return {"pos": int(pos), "neg": int(neg)}
 
     def emotionScoreFeatureSet(self, liwcUnwarpedSentence, svm = False):
         negScore = PostProcessing.getEmoScoreForLIWCConvertedPost(liwcUnwarpedSentence, self.liwcProcesses, "Neg")
@@ -512,6 +524,7 @@ class SupervisedClassifier:
                 feature_set += [(self.emotionScoreFeatureSet(negTokenizedPosts[uid], svm), 'neg')]
 
         random.shuffle(feature_set)
+        print feature_set[:10]
         return feature_set
 
     #def getFeatureSetForAPost(self,tokenizedPost, classification):
@@ -529,7 +542,7 @@ class SupervisedClassifier:
             self.classifier = nltk.NaiveBayesClassifier.train(feature_set)
             self.classifier.show_most_informative_features(20)
         elif classifierType == "SVM":
-            self.classifier = nltk.classify.SklearnClassifier(LinearSVC())
+            self.classifier = nltk.classify.SklearnClassifier(NuSVC())
             self.classifier.train(feature_set)
         elif classifierType == "Maxent":
             self.classifier = nltk.MaxentClassifier.train(feature_set)
@@ -679,48 +692,75 @@ class NgramClassifier():
             self.pos_freq["uni"] = nltk.FreqDist(post_text)
             self.pos_freq["bi"] = nltk.FreqDist(nltk.bigrams(post_text))
             self.pos_freq["tri"] = nltk.FreqDist(nltk.trigrams(post_text))
+            self.pos_freq["4"] = nltk.FreqDist(nltk.ngrams(post_text, 4))
+            self.pos_freq["5"] = nltk.FreqDist(nltk.ngrams(post_text, 5))
+            self.pos_freq["6"] = nltk.FreqDist(nltk.ngrams(post_text, 6))
         for uid,post_text in trN.items():
             self.neg_freq["uni"] = nltk.FreqDist(post_text)
             self.neg_freq["bi"] = nltk.FreqDist(nltk.bigrams(post_text))
             self.neg_freq["tri"] = nltk.FreqDist(nltk.trigrams(post_text))
+            self.neg_freq["4"] = nltk.FreqDist(nltk.ngrams(post_text, 4))
+            self.neg_freq["5"] = nltk.FreqDist(nltk.ngrams(post_text, 5))
+            self.neg_freq["6"] = nltk.FreqDist(nltk.ngrams(post_text, 6))
 
-        self.vocab_size = {}
-        for n in ["uni","bi","tri"]:
-            self.vocab_size[n] = len(set(self.pos_freq[n].keys() + self.neg_freq[n].keys()))
+        # self.pos_vocab_size = {}
+        # self.neg_vocab_size = {}
+        # for n in ["uni","bi","tri"]:
+        #     self.pos_vocab_size[n] = len(set(self.pos_freq[n].keys()))
+        #     self.neg_vocab_size[n] = len(set(self.neg_freq[n].keys()))
 
     def prob(self, text):
         """
         Computes the log-probabilities of the post belonging to the positive and negative dataset, respectively
         Uses stupid backoff (alpha = 0.4)
         """
-        pos = 1
-        neg = 1
+        pos = 1.0
+        neg = 1.0
+        n = len(text)
+        if n == 0: return (1.0,1.0)
         alpha = 0.4
         # V = float(len(self.vocab))
         for i in xrange(len(text) - 2):
-            unigram,bigram,trigram = [tuple(text[i:i+n]) for n in [1,2,3]]
+            unigram,bigram,trigram,gram4,gram5,gram6 = [tuple(text[i:i+n]) for n in [1,2,3,4,5,6]]
             unigram = unigram[0] # unwrap
             # pdb.set_trace()
-            if trigram in self.pos_freq["tri"]:
+            if gram6 in self.pos_freq["6"]:
+                pos += log((alpha**0) * self.pos_freq["6"][gram6]) - log(sum(self.pos_freq["6"].values()))
+            elif gram5 in self.pos_freq["5"]:
+                pos += log((alpha**1) * self.pos_freq["5"][gram5]) - log(sum(self.pos_freq["5"].values()))
+            elif gram4 in self.pos_freq["4"]:
+                pos += log((alpha**2) * self.pos_freq["4"][gram4]) - log(sum(self.pos_freq["4"].values()))
+            elif trigram in self.pos_freq["tri"]:
                 # pdb.set_trace()
-                pos += log(self.pos_freq["tri"][trigram] / float(self.vocab_size["tri"]))
+                pos += log((alpha**3) * self.pos_freq["tri"][trigram]) - log(sum(self.pos_freq["tri"].values()))
             elif bigram in self.pos_freq["bi"]:
-                pos += log(alpha * self.pos_freq["bi"][bigram] / float(self.vocab_size["bi"]))
+                pos += log((alpha**4) *  self.pos_freq["bi"][bigram]) - log(sum(self.pos_freq["bi"].values()))
+                # pos += log(alpha * self.pos_freq["bi"][bigram] / float(self.pos_vocab_size["bi"]))
             elif unigram in self.pos_freq["uni"]:
-                pos += log((alpha ** 2) * self.pos_freq["uni"][unigram] / float(self.vocab_size["uni"]))
+                pos += log((alpha**5) * self.pos_freq["uni"][unigram]) - log(sum(self.pos_freq["uni"].values()))
+                # pos += log((alpha ** 2) * self.pos_freq["uni"][unigram] / float(self.pos_vocab_size["uni"]))
             else:
                 pos += 0 # log((alpha ** 3) / V)
 
-            if trigram in self.neg_freq["tri"]:
-                neg += log(self.neg_freq["tri"][trigram] / float(self.vocab_size["tri"]))
+            if gram6 in self.neg_freq["6"]:
+                neg += log((alpha**0) * self.neg_freq["6"][gram6]) - log(sum(self.neg_freq["6"].values()))
+            elif gram5 in self.neg_freq["5"]:
+                neg += log((alpha**1) * self.neg_freq["5"][gram5]) - log(sum(self.neg_freq["5"].values()))
+            elif gram4 in self.neg_freq["4"]:
+                neg += log((alpha**2) * self.neg_freq["4"][gram4]) - log(sum(self.neg_freq["4"].values()))
+            elif trigram in self.neg_freq["tri"]:
+                neg += log((alpha**3) * self.neg_freq["tri"][trigram]) - log(sum(self.neg_freq["tri"].values()))
+                # neg += log(self.neg_freq["tri"][trigram] / float(self.neg_vocab_size["tri"]))
             elif bigram in self.neg_freq["bi"]:
-                neg += log(alpha * self.neg_freq["bi"][bigram] / float(self.vocab_size["bi"]))
+                neg += log((alpha**4) * self.neg_freq["bi"][bigram]) - log(sum(self.neg_freq["bi"].values()))
+                # neg += log(alpha * self.neg_freq["bi"][bigram] / float(self.neg_vocab_size["bi"]))
             elif unigram in self.neg_freq["uni"]:
-                neg += log((alpha ** 2) * self.neg_freq["uni"][unigram] / float(self.vocab_size["uni"]))
+                neg += log((alpha**5) * self.neg_freq["uni"][unigram]) - log(sum(self.neg_freq["uni"].values()))
+                # neg += log((alpha ** 2) * self.neg_freq["uni"][unigram] / float(self.neg_vocab_size["uni"]))
             else:
                 neg += 0 # log((alpha ** 3) / V)
             # print unigram,bigram,trigram,pos,neg
-        return pos,neg
+        return pos/n, neg/n
 
     def classify(self, post):
         """Classifies post by using log probs"""
@@ -836,6 +876,104 @@ class MPQALoader:
 
         return mpqaTable
 
+def trainNgram(char=False):
+    # Check pickle cache
+    pickle_filename = join(picklePath, str(hash(str(char) + "-may.16.2017.11:06AM")) + ".pickle")
+    if isfile(pickle_filename):
+        print 'Initializing from cache'
+        with open(pickle_filename, 'rb') as f:
+            tpPostsTrain, tnPostsTrain, tpPostsDev, tnPostsDev,charTpPostsTrain,charTnPostsTrain,charTpPostsDev,charTnPostsDev = pickle.load(f)
+    else:
+        data = DataLoader()
+        data.getRandomSample(1000)
+
+        posPostProcess = PostProcessing(data.getPositivePosts())
+        negPostProcess = PostProcessing(data.getControlsPosts())
+        posPostProcess.concatPostsByUser()
+        negPostProcess.concatPostsByUser()
+
+        data.clearPosts()
+        data.getRandomSample(500, 'Dev')
+
+        posPostProcessDev = PostProcessing(data.getPositivePosts())
+        negPostProcessDev = PostProcessing(data.getControlsPosts())
+        posPostProcessDev.concatPostsByUser()
+        negPostProcessDev.concatPostsByUser()
+
+        # lemmatize for word model, but not char model
+        lemmatize = not char
+
+        tpPostsTrain = PostProcessing.tokenizePosts(posPostProcess.getConcatPostBodies(), lemmatize=lemmatize)
+        tnPostsTrain = PostProcessing.tokenizePosts(negPostProcess.getConcatPostBodies(), lemmatize=lemmatize)
+        tpPostsDev = PostProcessing.tokenizePosts(posPostProcessDev.getConcatPostBodies(), lemmatize=lemmatize)
+        tnPostsDev = PostProcessing.tokenizePosts(negPostProcessDev.getConcatPostBodies(), lemmatize=lemmatize)
+
+        charTpPostsTrain = posPostProcess.getConcatPostBodies()
+        charTnPostsTrain = negPostProcess.getConcatPostBodies()
+        charTpPostsDev = posPostProcessDev.getConcatPostBodies()
+        charTnPostsDev = negPostProcessDev.getConcatPostBodies()
+
+        for uid in charTpPostsTrain:
+            charTpPostsTrain[uid] = charTpPostsTrain[uid].lower()
+        for uid in charTnPostsTrain:
+            charTnPostsTrain[uid] = charTnPostsTrain[uid].lower()
+        for uid in charTpPostsDev:
+            charTpPostsDev[uid] = charTpPostsDev[uid].lower()
+        for uid in charTnPostsDev:
+            charTnPostsDev[uid] = charTnPostsDev[uid].lower()
+
+        # Write to pickle cache
+        with open(pickle_filename, 'wb') as f:
+            pickle.dump((tpPostsTrain, tnPostsTrain, tpPostsDev, tnPostsDev,charTpPostsTrain,charTnPostsTrain,charTpPostsDev,charTnPostsDev), f, protocol=pickle.HIGHEST_PROTOCOL)
+
+    if char:
+        # char model
+        ngram = NgramClassifier(charTpPostsTrain, charTnPostsTrain)
+    else:
+        # word model
+        ngram = NgramClassifier(tpPostsTrain, tnPostsTrain)
+
+    # for uid in tpPostsDev:
+    #     label = ngram.classify(tpPostsDev[uid])
+    #     print str(uid), ":", str(ngram.prob(tpPostsDev[uid])), label, ("WRONG" if label != "pos" else "")
+    # for uid in tnPostsDev:
+    #     label = ngram.classify(tnPostsDev[uid])
+    #     print str(uid), ":", str(ngram.prob(tnPostsDev[uid])), label, ("WRONG" if label != "neg" else "")
+
+    with open("pos.pos.txt", "w") as pp:
+        with open("pos.neg.txt", "w") as pn:
+            with open("pos.delta.txt", "w") as pd:
+                for uid in tpPostsDev:
+                    pos,neg = ngram.prob(tpPostsDev[uid])
+                    pp.write("%f\n" % pos)
+                    pn.write("%f\n" % neg)
+                    pd.write("%f\n" % (pos-neg))
+    with open("neg.pos.txt", "w") as np:
+        with open("neg.neg.txt", "w") as nn:
+            with open("neg.delta.txt", "w") as nd:
+                for uid in tnPostsDev:
+                    pos,neg = ngram.prob(tnPostsDev[uid])
+                    np.write("%f\n" % pos)
+                    nn.write("%f\n" % neg)
+                    nd.write("%f\n" % (pos-neg))
+
+    # cm = ngram.confusionMatrix(tpPostsDev, tnPostsDev)
+    # print (cm.pretty_format(sort_by_count=True, show_percents=True))
+    # pr, rc, fm = ngram.classifierPRF(tpPostsDev, tnPostsDev)
+    # print "Precision = " + str(pr) + ", Recall = " + str(rc) + ", F-Measure = " + str(fm)
+
+    supervised_classifier = SupervisedClassifier(None, None)
+    supervised_classifier.loadNgramClassifier(ngram)
+    supervised_classifier.trainClassifier(tpPostsTrain, tnPostsTrain, "DT" if not char else "NB")
+
+    # print supervised_classifier.classifierAccuracy(tpPostsDev, tnPostsDev)
+    # cm = supervised_classifier.classifierConfusionMatrix(tpPostsDev, tnPostsDev)
+    pr, rc, fm, ac, cm = supervised_classifier.classifierPRF(tpPostsDev, tnPostsDev)
+
+    print (cm.pretty_format(sort_by_count=True, show_percents=True))
+    print "Accuracy = " + str(ac) + ", Precision = " + str(pr) + ", Recall = " + str(rc) + ", F-Measure = " + str(fm)
+
+
 if __name__ == "__main__":
     random.seed(773)
     """
@@ -922,69 +1060,7 @@ if __name__ == "__main__":
     # ------------------------------------ Word/Char Models -------------------------------------------------------
     # -------------------------------------------------------------------------------------------------------------
 
-    # Check pickle cache
-    pickle_filename = join(picklePath, str(hash("may.9.2017.11:25PM")) + ".pickle")
-    if isfile(pickle_filename):
-        print 'Initializing from cache'
-        with open(pickle_filename, 'rb') as f:
-            tpPostsTrain, tnPostsTrain, tpPostsDev, tnPostsDev,charTpPostsTrain,charTnPostsTrain,charTpPostsDev,charTnPostsDev = pickle.load(f)
-    else:
-        data = DataLoader()
-        data.getRandomSample(100)
-
-        posPostProcess = PostProcessing(data.getPositivePosts())
-        negPostProcess = PostProcessing(data.getControlsPosts())
-        posPostProcess.concatPostsByUser()
-        negPostProcess.concatPostsByUser()
-
-        data.clearPosts()
-        data.getRandomSample(20, 'Dev')
-
-        posPostProcessDev = PostProcessing(data.getPositivePosts())
-        negPostProcessDev = PostProcessing(data.getControlsPosts())
-        posPostProcessDev.concatPostsByUser()
-        negPostProcessDev.concatPostsByUser()
-
-        tpPostsTrain = PostProcessing.tokenizePosts(posPostProcess.getConcatPostBodies())
-        tnPostsTrain = PostProcessing.tokenizePosts(negPostProcess.getConcatPostBodies())
-        tpPostsDev = PostProcessing.tokenizePosts(posPostProcessDev.getConcatPostBodies())
-        tnPostsDev = PostProcessing.tokenizePosts(negPostProcessDev.getConcatPostBodies())
-
-        charTpPostsTrain = posPostProcess.getConcatPostBodies()
-        charTnPostsTrain = negPostProcess.getConcatPostBodies()
-        charTpPostsDev = posPostProcessDev.getConcatPostBodies()
-        charTnPostsDev = negPostProcessDev.getConcatPostBodies()
-
-        # Write to pickle cache
-        with open(pickle_filename, 'wb') as f:
-            pickle.dump((tpPostsTrain, tnPostsTrain, tpPostsDev, tnPostsDev,charTpPostsTrain,charTnPostsTrain,charTpPostsDev,charTnPostsDev), f, protocol=pickle.HIGHEST_PROTOCOL)
-
-    # char model
-    ngram = NgramClassifier(charTpPostsTrain, charTnPostsTrain)
-    # word model
-    # ngram = NgramClassifier(tpPostsTrain, tnPostsTrain)
-    for uid in tpPostsDev:
-        label = ngram.classify(tpPostsDev[uid])
-        print str(uid), ":", str(ngram.prob(tpPostsDev[uid])), label, ("WRONG" if label != "pos" else "")
-    for uid in tnPostsDev:
-        label = ngram.classify(tnPostsDev[uid])
-        print str(uid), ":", str(ngram.prob(tnPostsDev[uid])), label, ("WRONG" if label != "neg" else "")
-
-    cm = ngram.confusionMatrix(tpPostsDev, tnPostsDev)
-    print (cm.pretty_format(sort_by_count=True, show_percents=True))
-    pr, rc, fm = ngram.classifierPRF(tpPostsDev, tnPostsDev)
-    print "Precision = " + str(pr) + ", Recall = " + str(rc) + ", F-Measure = " + str(fm)
-
-    supervised_classifier = SupervisedClassifier(None, None)
-    supervised_classifier.loadNgramClassifier(ngram)
-    supervised_classifier.trainClassifier(tpPostsTrain, tnPostsTrain, "Maxent")
-
-    # print supervised_classifier.classifierAccuracy(tpPostsDev, tnPostsDev)
-    # cm = supervised_classifier.classifierConfusionMatrix(tpPostsDev, tnPostsDev)
-    pr, rc, fm, ac, cm = supervised_classifier.classifierPRF(tpPostsDev, tnPostsDev)
-
-    print (cm.pretty_format(sort_by_count=True, show_percents=True))
-    print "Accuracy = " + str(ac) + ", Precision = " + str(pr) + ", Recall = " + str(rc) + ", F-Measure = " + str(fm)
+    trainNgram(char=True)
 
     # -------------------------------------------------------------------------------------------------------------
     # ------------------------------------ Junk -------------------------------------------------------------------
