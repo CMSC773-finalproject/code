@@ -1,5 +1,7 @@
 # finalproject
 
+> Note: much of the language model and subreddit classification code is in the colin/baseline (bad branch name..) branch.
+
 Computational Linguistics II Final Exam Project: Exploring Linguistic Signal for Suicidality in Social Media
 
 ```
