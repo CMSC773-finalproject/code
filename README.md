@@ -7,6 +7,18 @@ hist(fperson$PosScore, breaks = 20, xlim=c(0,2), col=rgb(0,0,1,0.5))
 
 hist(fperson$NegScore, breaks = 20, xlim=c(0,2), col=rgb(0,0,1,0.5), add=T)
 ```
+# Readability and Time Frame implementation
+Readability and Time frame code is included in Readability_timeframe.py code.
+Code is written sequentially so just implementing it gives the sequential results
+  -Runs the code for checking the Readability score distribution for all posts and for user level distribution
+  -Gives t-test values(statistics and p-value) for readability score of positve and control users
+  -Runs code for checking time frame distribution for all posts and for user level distribution
+  -Gives t-test values for time frames of positive and control users
+  -trains the classifiers with train data and tests the classifier against test data.
+  
+ Final output is Precision, recall and f-1 scores along with confusion matrix for time-frame as feature. 
+ FYI: Two merge files were also included in this git location
+
 
 ### Colin's R commands
 
