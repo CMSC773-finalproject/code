@@ -13,6 +13,8 @@ import operator
 from collections import namedtuple, defaultdict
 import random
 
+from itertools import izip
+from collections import Counter
 from os.path import join,isfile
 import pickle
 from itertools import chain
@@ -973,6 +975,47 @@ def trainNgram(char=False):
     print (cm.pretty_format(sort_by_count=True, show_percents=True))
     print "Accuracy = " + str(ac) + ", Precision = " + str(pr) + ", Recall = " + str(rc) + ", F-Measure = " + str(fm)
 
+def subreddits():
+
+    subreddits = defaultdict(dict)
+    with open("subreddits-liwc.txt", "r") as liwc_f:
+        with open("subreddits-all.txt", "r") as sr_f:
+            for x, y in izip(liwc_f, sr_f):
+                liwc = x.strip().lower()
+                sr = y.strip()
+                if sr not in subreddits:
+                    if liwc != '[]':
+                        subreddits[sr] = [tuple(map(int,t.replace('(','').replace(')','').split(', '))) for t in liwc[1:-1].split(', (')]
+                        a = {} # class -> freq map
+                        # class,freq
+                        for k,v in subreddits[sr]:
+                            if k not in a:
+                                a[k] = v
+                            else:
+                                a[k] += v
+                        subreddits[sr] = a
+                    else:
+                        subreddits[sr] = []
+
+    # pdb.set_trace()
+    data = DataLoader()
+    data.getRandomSample(100)
+
+    posPostProcess = PostProcessing(data.getPositivePosts())
+    negPostProcess = PostProcessing(data.getControlsPosts())
+
+    posLIWC = defaultdict(dict)
+    for p in posPostProcess.rawPosts:
+        dic = subreddits[p.subReddit]
+        posLIWC[p.userID] = Counter(dic) + Counter(posLIWC[p.userID])
+    negLIWC = defaultdict(dict)
+    for p in negPostProcess.rawPosts:
+        dic = subreddits[p.subReddit]
+        negLIWC[p.userID] = Counter(dic) + Counter(negLIWC[p.userID])
+
+    data.clearPosts()
+
+    pdb.set_trace()
 
 if __name__ == "__main__":
     random.seed(773)
@@ -1060,7 +1103,8 @@ if __name__ == "__main__":
     # ------------------------------------ Word/Char Models -------------------------------------------------------
     # -------------------------------------------------------------------------------------------------------------
 
-    trainNgram(char=True)
+    # trainNgram(char=True)
+    subreddits()
 
     # -------------------------------------------------------------------------------------------------------------
     # ------------------------------------ Junk -------------------------------------------------------------------
